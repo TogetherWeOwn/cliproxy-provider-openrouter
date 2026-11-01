@@ -87,7 +87,8 @@ The plugin YAML has no settings. No CLIProxy configuration is required.
 ## Models and execution
 
 Model discovery calls `GET /api/v1/models` per auth through the host HTTP client
-(no probes: probes cost money). **Namespace rule:** every model identifier the
+(no probes: probes cost money). Fixed model namespace `openrouter/`; auth
+`prefix` does not replace it. Every model identifier the
 plugin publishes, both `id` and `name` (the host lists `name` as the Gemini
 model name), carries `openrouter/` exactly once, with no exception for `~`
 aliases, `:free` variants or OpenRouter's own `openrouter/...` routers (those
