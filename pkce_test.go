@@ -223,6 +223,45 @@ func TestPKCEHostErrorFile(t *testing.T) {
 	}
 }
 
+// TestPKCEInvalidCodeFileCloses covers a claimed-but-useless code file: corrupt
+// JSON, or a record with neither code nor error (e.g. the host persisted a
+// pasted approval URL instead of the redirect URL). The first poll errors, and
+// the dead session is dropped so later polls stay Error instead of regressing
+// to Pending forever on a login that can never complete.
+func TestPKCEInvalidCodeFileCloses(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name string
+		raw  func(state string) []byte
+	}{
+		{"corrupt", func(state string) []byte { return []byte(`{"code":`) }},
+		{"codeless", func(state string) []byte { return []byte(`{"state":"` + state + `"}`) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p, _ := pkceProvider(t, &fakePKCEClient{})
+			authDir := t.TempDir()
+			start := startPKCE(t, p, authDir)
+			if err := os.WriteFile(oauthFile(authDir, start.State), tc.raw(start.State), 0600); err != nil {
+				t.Fatal(err)
+			}
+			done, err := p.PollLogin(ctx, pluginapi.AuthLoginPollRequest{State: start.State})
+			if err != nil || done.Status != pluginapi.AuthLoginStatusError {
+				t.Fatalf("invalid approval not an error: %+v %v", done, err)
+			}
+			if !strings.Contains(done.Message, "stored approval is invalid") {
+				t.Fatalf("wrong error message: %q", done.Message)
+			}
+			again, err := p.PollLogin(ctx, pluginapi.AuthLoginPollRequest{State: start.State})
+			if err != nil || again.Status != pluginapi.AuthLoginStatusError {
+				t.Fatalf("dead login regressed to %+v %v; want Error", again, err)
+			}
+			if again.Status == pluginapi.AuthLoginStatusPending {
+				t.Fatalf("dead login reports Pending: %q", again.Message)
+			}
+		})
+	}
+}
+
 // blockingPKCEClient holds the exchange open so a second poller is forced to
 // overlap it.
 type blockingPKCEClient struct {

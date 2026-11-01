@@ -293,6 +293,16 @@ func (l *pkceLogin) PollLogin(ctx context.Context, req pluginapi.AuthLoginPollRe
 	}
 	current.claimed = true
 	l.mu.Unlock()
+	// A claimed session that cannot produce credentials is dead: drop it so
+	// later polls report Error instead of Pending forever on a login that
+	// can never complete.
+	drop := func() {
+		l.mu.Lock()
+		if current, ok := l.sessions[req.State]; ok && current == s {
+			delete(l.sessions, req.State)
+		}
+		l.mu.Unlock()
+	}
 	// The code is single-use: remove the file before exchanging so a retry
 	// or a second poller cannot replay it.
 	_ = os.Remove(oauthFile(s.authDir, req.State))
@@ -301,26 +311,20 @@ func (l *pkceLogin) PollLogin(ctx context.Context, req pluginapi.AuthLoginPollRe
 		Error string `json:"error"`
 	}
 	if json.Unmarshal(raw, &stored) != nil {
+		drop()
 		return pluginapi.AuthLoginPollResponse{Status: pluginapi.AuthLoginStatusError, Message: "stored approval is invalid; start a new login"}, nil
 	}
 	if strings.TrimSpace(stored.Error) != "" {
-		l.mu.Lock()
-		if current, ok := l.sessions[req.State]; ok && current == s {
-			delete(l.sessions, req.State)
-		}
-		l.mu.Unlock()
+		drop()
 		return pluginapi.AuthLoginPollResponse{Status: pluginapi.AuthLoginStatusError, Message: "OpenRouter reported an approval error; start a new login"}, nil
 	}
 	if strings.TrimSpace(stored.Code) == "" {
+		drop()
 		return pluginapi.AuthLoginPollResponse{Status: pluginapi.AuthLoginStatusError, Message: "stored approval is invalid; start a new login"}, nil
 	}
 	key, err := l.exchange(ctx, req.HTTPClient, strings.TrimSpace(stored.Code), s.verifier)
 	if err != nil {
-		l.mu.Lock()
-		if current, ok := l.sessions[req.State]; ok && current == s {
-			delete(l.sessions, req.State)
-		}
-		l.mu.Unlock()
+		drop()
 		return pluginapi.AuthLoginPollResponse{Status: pluginapi.AuthLoginStatusError, Message: err.Error()}, nil
 	}
 	authDir := s.authDir
