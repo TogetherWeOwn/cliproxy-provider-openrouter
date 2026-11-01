@@ -84,7 +84,7 @@ func (k *keyState) get(ctx context.Context, authID string, c credentials, maxSta
 			return r, err
 		}
 		if attempt >= maxReadAttempts {
-			// Every read was overtaken by a newer limit error: fail closed.
+			// Every read was overtaken by a limit error or a reset: fail closed.
 			return keyReading{}, quotaUnavailable()
 		}
 	}
@@ -111,7 +111,8 @@ func (r keyReading) effectiveResetsAt() *time.Time {
 	return r.Effective.ResetsAt
 }
 
-// maxReadAttempts bounds re-reads after invalidations overtook a shared read.
+// maxReadAttempts bounds re-reads after invalidations or resets overtook a
+// shared read.
 const maxReadAttempts = 3
 
 func (k *keyState) getOnce(ctx context.Context, authID string, c credentials, maxStale time.Duration) (keyReading, bool, error) {
@@ -151,9 +152,11 @@ func (k *keyState) getOnce(ctx context.Context, authID string, c credentials, ma
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	if f.err == nil {
-		// The read started before an invalidation: it may predate the limit
-		// error, so it must not admit.
-		return f.reading, k.entries[authID] == e && e.gen != f.gen, nil
+		// A read that started before an invalidation may predate the limit
+		// error, and one that a reset overtook (a slow /key or /credits
+		// around 00:00 UTC) holds the old window's counts: neither may admit.
+		overtaken := k.entries[authID] == e && e.gen != f.gen
+		return f.reading, overtaken || !k.now().Before(f.reading.boundary()), nil
 	}
 	if maxStale > 0 && e.good != nil && !e.stale && k.now().Sub(e.good.FetchedAt) <= maxStale && k.now().Before(e.good.boundary()) {
 		return *e.good, false, nil
@@ -170,10 +173,13 @@ const defaultCreditsTimeout = 5 * time.Second
 // only omits the account balance.
 func (k *keyState) read(ctx context.Context, c credentials, start time.Time) (keyReading, error) {
 	base := k.endpoint()
+	// /credits is never cancelled early, even when /key fails: cancelling an
+	// in-flight request on the shared HTTP/1.1 pool can break the next read.
+	// Its own timeout bounds it.
 	creditsCtx, cancel := context.WithTimeout(ctx, k.creditsTimeout)
-	defer cancel()
 	credits := make(chan *account, 1)
 	go func() {
+		defer cancel()
 		a, err := fetchCredits(creditsCtx, k.client, base, c.apiKey)
 		if err != nil {
 			a = nil

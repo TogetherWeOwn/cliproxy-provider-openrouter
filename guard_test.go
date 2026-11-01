@@ -320,3 +320,33 @@ func TestRepeatedlySupersededReadFailsClosed(t *testing.T) {
 		t.Fatalf("%+v", e)
 	}
 }
+
+// A read that a reset overtakes while in flight (here /key answers across
+// 00:00 UTC) is not used: the guard re-reads in the new window.
+func TestReadOvertakenByAResetIsReread(t *testing.T) {
+	clock := newClock(utc("2026-11-04T23:59:59Z"))
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/key") {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		if calls.Add(1) == 1 {
+			clock.advance(3 * time.Second) // the answer arrives after midnight
+			_, _ = w.Write([]byte(`{"data":{"limit":2,"limit_remaining":0,"limit_reset":"daily"}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":{"limit":2,"limit_remaining":2,"limit_reset":"daily"}}`))
+	}))
+	defer srv.Close()
+	client := kit.NewQuotaHTTPClient(nil)
+	defer client.CloseIdleConnections()
+	keys := newKeyState(client)
+	keys.base, keys.now = srv.URL, clock.now
+	g := newGuard(keys)
+	g.now = clock.now
+	g.observeHost(pluginapi.HostConfigSummary{})
+	if err := g.admit(context.Background(), "auth-1", credentials{apiKey: exampleKey}, storage(""), nil, "a/b"); err != nil || calls.Load() != 2 {
+		t.Fatalf("pre-reset reading used after the reset: %v calls=%d", err, calls.Load())
+	}
+}
