@@ -25,7 +25,7 @@ func TestRegistryVersionMatches(t *testing.T) {
 		t.Fatalf("registry %v", err)
 	}
 	p := reg.Plugins[0]
-	if version != "0.1.0" {
+	if version != "0.2.0" {
 		t.Fatalf("version constant %s", version)
 	}
 	if p.ID != provider || p.Version != version || p.License != "MIT" || p.Install.Type != "github-release" || p.Repository != "https://github.com/TogetherWeOwn/cliproxy-provider-openrouter" {
@@ -42,7 +42,7 @@ func TestReleaseArchiveAndChecksums(t *testing.T) {
 	if result, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("package: %v\n%s", err, result)
 	}
-	archive := filepath.Join(out, "openrouter_0.1.0_linux_amd64.zip")
+	archive := filepath.Join(out, "openrouter_0.2.0_linux_amd64.zip")
 	raw, err := os.ReadFile(archive)
 	if err != nil {
 		t.Fatal(err)
@@ -52,7 +52,7 @@ func TestReleaseArchiveAndChecksums(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(checksums), hex.EncodeToString(sum[:])+"  openrouter_0.1.0_linux_amd64.zip") {
+	if !strings.Contains(string(checksums), hex.EncodeToString(sum[:])+"  openrouter_0.2.0_linux_amd64.zip") {
 		t.Fatalf("incorrect checksums %s", checksums)
 	}
 	reader, err := zip.OpenReader(archive)
