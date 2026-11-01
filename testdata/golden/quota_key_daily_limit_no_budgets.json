@@ -1,0 +1,91 @@
+{
+  "subscription": {
+    "plan": "OpenRouter",
+    "tierName": "paid credits"
+  },
+  "summary": [
+    {
+      "key": "key_limit_usd",
+      "label": "Key limit",
+      "value": 2,
+      "format": "currency",
+      "currency": "USD"
+    },
+    {
+      "key": "key_remaining_usd",
+      "label": "Key limit remaining",
+      "value": 1.25,
+      "format": "currency",
+      "currency": "USD"
+    },
+    {
+      "key": "key_spend_day_usd",
+      "label": "Key spend today (UTC)",
+      "value": 0.75,
+      "format": "currency",
+      "currency": "USD"
+    },
+    {
+      "key": "key_spend_week_usd",
+      "label": "Key spend this week (Mon-Sun UTC)",
+      "value": 3,
+      "format": "currency",
+      "currency": "USD"
+    },
+    {
+      "key": "key_spend_month_usd",
+      "label": "Key spend this month (UTC)",
+      "value": 9,
+      "format": "currency",
+      "currency": "USD"
+    },
+    {
+      "key": "key_spend_total_usd",
+      "label": "Key spend all time",
+      "value": 9,
+      "format": "currency",
+      "currency": "USD"
+    },
+    {
+      "key": "byok_spend_day_usd",
+      "label": "BYOK spend today (UTC)",
+      "value": 0.25,
+      "format": "currency",
+      "currency": "USD"
+    },
+    {
+      "key": "byok_spend_week_usd",
+      "label": "BYOK spend this week (Mon-Sun UTC)",
+      "value": 0.5,
+      "format": "currency",
+      "currency": "USD"
+    },
+    {
+      "key": "byok_spend_month_usd",
+      "label": "BYOK spend this month (UTC)",
+      "value": 1.5,
+      "format": "currency",
+      "currency": "USD"
+    },
+    {
+      "key": "byok_spend_total_usd",
+      "label": "BYOK spend all time",
+      "value": 1.5,
+      "format": "currency",
+      "currency": "USD"
+    }
+  ],
+  "groups": [
+    {
+      "displayName": "Key credit limit",
+      "buckets": [
+        {
+          "window": "daily key limit",
+          "remainingFraction": 0.625,
+          "resetTime": "2026-11-05T00:00:00Z",
+          "description": "$0.75 of $2.00 used; $1.25 left; includes BYOK"
+        }
+      ]
+    }
+  ]
+}

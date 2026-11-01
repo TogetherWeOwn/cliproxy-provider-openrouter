@@ -1,0 +1,1 @@
+{"data":{"label":"example","limit":2,"limit_remaining":1.25,"limit_reset":"daily","include_byok_in_limit":true,"usage":9,"usage_daily":0.75,"usage_weekly":3,"usage_monthly":9,"byok_usage":1.5,"byok_usage_daily":0.25,"byok_usage_weekly":0.5,"byok_usage_monthly":1.5,"is_free_tier":false,"is_management_key":false}}

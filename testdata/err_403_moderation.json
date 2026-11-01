@@ -1,0 +1,1 @@
+{"error":{"code":403,"message":"Input was flagged by moderation","metadata":{"reasons":["example"],"flagged_input":"example...","provider_name":"Example","model_slug":"example/model"}}}

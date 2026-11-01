@@ -1,0 +1,55 @@
+{
+  "subscription": {
+    "plan": "OpenRouter",
+    "tierName": "NO KEY LIMIT"
+  },
+  "summary": [
+    {
+      "key": "key_spend_day_usd",
+      "label": "Key spend today (UTC)",
+      "value": 0.5,
+      "format": "currency",
+      "currency": "USD"
+    },
+    {
+      "key": "key_spend_week_usd",
+      "label": "Key spend this week (Mon-Sun UTC)",
+      "value": 2,
+      "format": "currency",
+      "currency": "USD"
+    },
+    {
+      "key": "key_spend_month_usd",
+      "label": "Key spend this month (UTC)",
+      "value": 7,
+      "format": "currency",
+      "currency": "USD"
+    },
+    {
+      "key": "key_spend_total_usd",
+      "label": "Key spend all time",
+      "value": 12.5,
+      "format": "currency",
+      "currency": "USD"
+    },
+    {
+      "key": "spend_reserve_usd",
+      "label": "Plugin spend reserve",
+      "value": 2,
+      "format": "currency",
+      "currency": "USD"
+    }
+  ],
+  "groups": [
+    {
+      "displayName": "Key credit limit",
+      "buckets": [
+        {
+          "window": "Key limit: NOT SET (UNBOUNDED spend)",
+          "remainingFraction": 0,
+          "description": "No credit limit is set; allow_unlimited_key admits requests and spend is limited only by account credits. Set a key limit at openrouter.ai/settings/keys."
+        }
+      ]
+    }
+  ]
+}

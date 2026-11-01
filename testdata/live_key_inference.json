@@ -1,0 +1,61 @@
+{
+  "data": {
+    "label": "<redacted>",
+    "is_management_key": false,
+    "is_provisioning_key": false,
+    "limit": 5,
+    "limit_reset": "weekly",
+    "limit_remaining": 5,
+    "include_byok_in_limit": false,
+    "budgets": [
+      {
+        "scope": "key_limit",
+        "guardrail_id": null,
+        "budget_id": null,
+        "limit_usd": 5,
+        "spend_usd": 0,
+        "remaining_usd": 5,
+        "reset_interval": "weekly",
+        "resets_at": "2026-11-02T00:00:00.000Z",
+        "include_byok": false
+      }
+    ],
+    "effective_budget": {
+      "scope": "key_limit",
+      "guardrail_id": null,
+      "budget_id": null,
+      "limit_usd": 5,
+      "spend_usd": 0,
+      "remaining_usd": 5,
+      "reset_interval": "weekly",
+      "resets_at": "2026-11-02T00:00:00.000Z",
+      "include_byok": false
+    },
+    "usage": 0,
+    "usage_daily": 0,
+    "usage_weekly": 0,
+    "usage_monthly": 0,
+    "byok_usage": 0,
+    "byok_usage_daily": 0,
+    "byok_usage_weekly": 0,
+    "byok_usage_monthly": 0,
+    "is_free_tier": false,
+    "expires_at": null,
+    "creator_user_id": "<redacted>",
+    "organization_id": "<redacted>",
+    "workspace_id": "<redacted>",
+    "allowed_data_regions": [
+      "global"
+    ],
+    "free_model_daily_requests": {
+      "used": 0,
+      "limit": 1000,
+      "remaining": 1000
+    },
+    "rate_limit": {
+      "requests": -1,
+      "interval": "10s",
+      "note": "This field is deprecated and safe to ignore."
+    }
+  }
+}

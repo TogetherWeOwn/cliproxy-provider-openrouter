@@ -1,0 +1,1 @@
+{"error":{"code":403,"message":"Key limit exceeded (daily limit). $2.01 of $2.00 used; resets 2026-11-05T00:00:00.000Z.","metadata":{"limit_source":"openrouter_key_limit","scope":"key_limit","limit_usd":2,"spend_usd":2.01,"resets_at":"2026-11-05T00:00:00.000Z","remedy_hint":"Wait for the reset."}}}

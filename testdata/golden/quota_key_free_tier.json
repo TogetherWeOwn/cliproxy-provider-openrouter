@@ -1,0 +1,81 @@
+{
+  "subscription": {
+    "plan": "OpenRouter",
+    "tierName": "free tier"
+  },
+  "summary": [
+    {
+      "key": "key_limit_usd",
+      "label": "Key limit",
+      "value": 1,
+      "format": "currency",
+      "currency": "USD"
+    },
+    {
+      "key": "key_remaining_usd",
+      "label": "Key limit remaining",
+      "value": 1,
+      "format": "currency",
+      "currency": "USD"
+    },
+    {
+      "key": "key_spend_day_usd",
+      "label": "Key spend today (UTC)",
+      "value": 0,
+      "format": "currency",
+      "currency": "USD"
+    },
+    {
+      "key": "key_spend_week_usd",
+      "label": "Key spend this week (Mon-Sun UTC)",
+      "value": 0,
+      "format": "currency",
+      "currency": "USD"
+    },
+    {
+      "key": "key_spend_month_usd",
+      "label": "Key spend this month (UTC)",
+      "value": 0,
+      "format": "currency",
+      "currency": "USD"
+    },
+    {
+      "key": "key_spend_total_usd",
+      "label": "Key spend all time",
+      "value": 0,
+      "format": "currency",
+      "currency": "USD"
+    },
+    {
+      "key": "free_requests_used",
+      "label": "Free-model requests today",
+      "value": 50,
+      "unit": "requests",
+      "format": "number"
+    }
+  ],
+  "groups": [
+    {
+      "displayName": "Key credit limit",
+      "buckets": [
+        {
+          "window": "monthly key limit",
+          "remainingFraction": 1,
+          "resetTime": "2026-12-01T00:00:00Z",
+          "description": "$0.00 of $1.00 used; $1.00 left"
+        }
+      ]
+    },
+    {
+      "displayName": "Free models (:free)",
+      "buckets": [
+        {
+          "window": "daily free-model requests",
+          "remainingFraction": 0,
+          "resetTime": "2026-11-05T00:00:00Z",
+          "description": "50/50 requests today (account-wide; 20/min not reported)"
+        }
+      ]
+    }
+  ]
+}

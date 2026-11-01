@@ -1,0 +1,4 @@
+data: {"id":"gen-example","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"hel"},"finish_reason":null}]}
+
+data: {"id":"gen-example","object":"chat.completion.chunk","error":{"code":429,"message":"Rate limit exceeded","metadata":{"error_type":"rate_limit_exceeded"}},"choices":[{"index":0,"delta":{"content":""},"finish_reason":"error"}]}
+

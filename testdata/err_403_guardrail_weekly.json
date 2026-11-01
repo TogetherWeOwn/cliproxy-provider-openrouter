@@ -1,0 +1,1 @@
+{"error":{"code":403,"message":"Org member budget limit exceeded (weekly limit). Contact your org admin. $52.00 of $50.00 used; resets 2026-11-09T00:00:00.000Z.","metadata":{"limit_source":"openrouter_guardrail_budget","scope":"member","limit_usd":50,"spend_usd":52,"resets_at":"2026-11-09T00:00:00.000Z","remedy_hint":"Wait for the budget window to reset."}}}

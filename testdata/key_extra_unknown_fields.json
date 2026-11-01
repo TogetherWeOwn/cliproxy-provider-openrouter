@@ -1,0 +1,1 @@
+{"data":{"limit":8,"limit_remaining":6,"limit_reset":"weekly","usage":2,"usage_daily":1,"usage_weekly":2,"usage_monthly":2,"is_free_tier":false,"is_management_key":false,"creator_user_id":"user-example","allowed_data_regions":["global"],"future_field":{"nested":[1,2,3]}},"meta":{"ignored":true}}
