@@ -183,3 +183,33 @@ func TestErrorOnlySuccessBodyIsClassified(t *testing.T) {
 		}
 	}
 }
+
+// OpenRouter answers 200 with null content and finish_reason "length" when
+// reasoning used up max_tokens (observed live). That is a success.
+func TestReasoningLengthIsASuccess(t *testing.T) {
+	h := newHarness(t, fixture(t, "key_monthly_limit.json"))
+	body := fixture(t, "ok_200_reasoning_length.json")
+	host := &fakeHost{body: body}
+	out, err := h.exec.Execute(context.Background(), execRequest(host, `{"model":"openrouter/vendor/reasoning-model","max_tokens":8}`))
+	if err != nil || !bytes.Equal(out.Payload, body) {
+		t.Fatalf("%s %v", out.Payload, err)
+	}
+}
+
+// The live ":free" 503 "no upstreams available" is a provider outage: a short
+// host cooldown, no invalidation, never quota.
+func TestFreeModelNoUpstreamsIsUnavailable(t *testing.T) {
+	h := newHarness(t, fixture(t, "live_key_inference.json"))
+	h.clock = newClock(liveNow)
+	h.keys.now, h.guard.now, h.exec.now = h.clock.now, h.clock.now, h.clock.now
+	called := false
+	h.keys.onInvalidate = func(string) { called = true }
+	host := &fakeHost{status: 503, chunks: [][]byte{fixture(t, "live_err_503_free_no_upstreams.json")}, body: fixture(t, "live_err_503_free_no_upstreams.json")}
+	_, err := h.exec.Execute(context.Background(), execRequest(host, `{"model":"openrouter/meta-llama/llama-3.3-70b-instruct:free"}`))
+	if e := rpcErr(t, err); e.HTTPStatus != 503 || e.Code != "upstream_unavailable" || called {
+		t.Fatalf("%+v invalidated=%v", e, called)
+	}
+	if err = admitWith(h, credentials{apiKey: exampleKey}, "meta-llama/llama-3.3-70b-instruct:free"); err != nil {
+		t.Fatalf("an outage must not latch the free models: %v", err)
+	}
+}

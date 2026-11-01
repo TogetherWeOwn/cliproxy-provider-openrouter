@@ -27,8 +27,9 @@ const (
 var modelIDPattern = regexp.MustCompile(`^~?[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._~:-]*$`)
 
 // catalog registers no static models; every model comes from GET /models for
-// an auth, prefixed with "openrouter/" so no bare vendor/model ID is ever
-// registered by this plugin.
+// an auth, and every identifier it publishes (ID and Name, which the host
+// lists as the Gemini model name) carries the fixed "openrouter/" namespace,
+// so no bare vendor/model ID is ever registered by this plugin.
 type catalog struct {
 	guard *guard
 	// base overrides the upstream base URL; tests point it at loopback.
@@ -205,7 +206,7 @@ func modelInfo(m modelWire) pluginapi.ModelInfo {
 		name = m.ID
 	}
 	info := pluginapi.ModelInfo{
-		ID: modelPrefix + m.ID, Object: "model", OwnedBy: provider, Name: m.ID, Created: m.Created,
+		ID: modelPrefix + m.ID, Object: "model", OwnedBy: provider, Name: modelPrefix + m.ID, Created: m.Created,
 		DisplayName: name + displayNameAffix, Description: truncateRunes(m.Description, maxDescription),
 		SupportedParameters: m.SupportedParameters,
 	}

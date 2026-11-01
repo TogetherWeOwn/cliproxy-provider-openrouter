@@ -19,12 +19,15 @@ import (
 // or the binding limit is at or below the auth's reserve.
 //
 // It keeps no local spend tally. OpenRouter enforces the key limit server
-// side; the reserve is a soft margin and the possible overshoot is the spend
-// of requests admitted within one 60-second reading.
+// side and the reserve is a soft margin. GET /key counters lag real spend, so
+// the reserve can be overshot by everything spent before the counters catch
+// up, not only by one 60-second reading.
 //
-// The host scopes every plugin failure to one (auth, model) pair, so after an
-// exhaustion each other model of the same auth is refused here once, at no
-// upstream cost, and then cools down until the reset as well.
+// Because a fresh reading can still show headroom after OpenRouter reported
+// a spent limit, every upstream exhaustion also sets a per-auth latch
+// (latch.go). The host scopes every plugin failure to one (auth, model) pair;
+// the latch makes each other model of the same auth fail here, at no upstream
+// cost, and then cool down until the reset as well.
 type guard struct {
 	keys      *keyState
 	hostProxy atomic.Pointer[string] // host proxy-url; nil until first seen
@@ -84,7 +87,18 @@ func (g *guard) admit(ctx context.Context, authID string, c credentials, storage
 		}
 		return quotaUnverified()
 	}
-	return decide(reading, c, model, g.now())
+	now := g.now()
+	if err = decide(reading, c, model, now); err != nil {
+		return err
+	}
+	if until, scope, ok := g.keys.latched(authID, reading, model, now); ok {
+		message := "OpenRouter reported a spent limit; waiting for its reset"
+		if scope == latchFree {
+			message = "OpenRouter daily free-model requests used up"
+		}
+		return quotaExhausted(message, retrySeconds(until, now))
+	}
+	return nil
 }
 
 // limitLayer is one spend cap that can block the key: the key limit, the

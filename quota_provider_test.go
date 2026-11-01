@@ -93,7 +93,7 @@ func TestNoLimitBucketModes(t *testing.T) {
 	r, _ := parseKey(fixture(t, "key_no_limit.json"), now0)
 	refused := normalizeQuota(r, credentials{apiKey: exampleKey}, now0).Groups[0].Buckets[0]
 	allowed := normalizeQuota(r, credentials{apiKey: exampleKey, allowUnlimited: true}, now0).Groups[0].Buckets[0]
-	if refused.RemainingFraction != 0 || !strings.Contains(refused.Window, "plugin refuses requests") || allowed.RemainingFraction != 1 || !strings.Contains(allowed.Window, "UNBOUNDED") {
+	if refused.RemainingFraction != 0 || !strings.Contains(refused.Window, "plugin refuses requests") || allowed.RemainingFraction != 0 || !strings.Contains(allowed.Window, "UNBOUNDED") {
 		t.Fatalf("%+v %+v", refused, allowed)
 	}
 }
@@ -105,7 +105,8 @@ func quotaRequest(extra string) pluginapi.QuotaFetchRequest {
 func TestQuotaProviderFetch(t *testing.T) {
 	h := newHarness(t, fixture(t, "key_monthly_limit.json"))
 	out, err := h.quota.FetchQuota(context.Background(), quotaRequest(""))
-	if err != nil || len(out.Groups) != 2 || out.Groups[0].Buckets[0].RemainingFraction != 0.42 || h.srv.creditCalls.Load() != 0 {
+	// The harness serves no /credits body, so the balance is omitted.
+	if err != nil || len(out.Groups) != 2 || out.Groups[0].Buckets[0].RemainingFraction != 0.42 || h.srv.creditCalls.Load() != 1 {
 		t.Fatalf("%+v %v", out, err)
 	}
 	desc, _ := h.quota.DescribeQuota(context.Background(), pluginapi.QuotaDescribeRequest{})
@@ -114,6 +115,8 @@ func TestQuotaProviderFetch(t *testing.T) {
 	}
 }
 
+// GET /credits uses the regular key. Any failure omits only the account
+// group; the key limit and everything else still work.
 func TestQuotaProviderCredits(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -122,14 +125,18 @@ func TestQuotaProviderCredits(t *testing.T) {
 		groups int
 	}{
 		{"success adds the account group", fixture(t, "credits_ok.json"), 200, 3},
-		{"403 omits only the account group", fixture(t, "credits_403_not_management.json"), 403, 2},
+		{"live regular-key response adds the account group", fixture(t, "live_credits_inference.json"), 200, 3},
+		{"401 omits only the account group", fixture(t, "key_401.json"), 401, 2},
+		{"403 omits only the account group", fixture(t, "credits_403.json"), 403, 2},
+		{"500 omits only the account group", []byte(`{"error":{"code":500}}`), 500, 2},
+		{"invalid body omits only the account group", []byte(`{"data":{"total_credits":"x"}}`), 200, 2},
 		{"zero credits", fixture(t, "credits_zero.json"), 200, 3},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newHarness(t, fixture(t, "key_monthly_limit.json"))
 			h.srv.credits, h.srv.creditsCode = tc.body, tc.status
-			out, err := h.quota.FetchQuota(context.Background(), quotaRequest(`,"management_api_key":"example-management-key"`))
-			if err != nil || len(out.Groups) != tc.groups || h.srv.creditCalls.Load() != 1 {
+			out, err := h.quota.FetchQuota(context.Background(), quotaRequest(""))
+			if err != nil || len(out.Groups) != tc.groups || h.srv.creditCalls.Load() != 1 || out.Groups[0].DisplayName != "Key credit limit" {
 				t.Fatalf("%+v %v", out, err)
 			}
 			if tc.groups == 3 {
@@ -138,7 +145,42 @@ func TestQuotaProviderCredits(t *testing.T) {
 					t.Fatalf("%+v", out.Groups[2])
 				}
 			}
+			for _, seen := range h.srv.seen() {
+				if seen != "/credits Bearer "+exampleKey && seen != "/key Bearer "+exampleKey {
+					t.Fatalf("unexpected request %q", seen)
+				}
+			}
 		})
+	}
+}
+
+// A slow /credits only delays a read by the credits timeout, then the
+// balance is omitted.
+func TestSlowCreditsDoesNotHoldAdmission(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/credits") {
+			select {
+			case <-release:
+			case <-r.Context().Done():
+			}
+			return
+		}
+		_, _ = w.Write(fixture(t, "key_monthly_limit.json"))
+	}))
+	defer srv.Close()
+	defer close(release)
+	client := kit.NewQuotaHTTPClient(nil)
+	defer client.CloseIdleConnections()
+	keys := newKeyState(client)
+	keys.base, keys.creditsTimeout = srv.URL, 50*time.Millisecond
+	start := time.Now()
+	r, err := keys.get(context.Background(), "auth-1", credentials{apiKey: exampleKey}, 0)
+	if err != nil || r.Account != nil || r.Limit == nil {
+		t.Fatalf("%+v %v", r, err)
+	}
+	if took := time.Since(start); took > 5*time.Second {
+		t.Fatalf("read waited %v for /credits", took)
 	}
 }
 
@@ -205,6 +247,10 @@ func TestInFlightPollNeverOverwritesNewerReading(t *testing.T) {
 	release := make(chan struct{})
 	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/credits") {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
 		if calls.Add(1) == 1 {
 			<-release
 			_, _ = w.Write(fixture(t, "key_weekly_limit.json"))
@@ -232,8 +278,10 @@ func TestInFlightPollNeverOverwritesNewerReading(t *testing.T) {
 		t.Fatalf("%+v %v", newer, err)
 	}
 	close(release)
-	if old := <-done; old.Reset != windowWeekly {
-		t.Fatalf("first caller should get its own read: %v", old.Reset)
+	// The first caller's read started before the invalidation, so it must not
+	// be returned: the caller takes the newer reading instead.
+	if old := <-done; old.Reset != windowMonthly {
+		t.Fatalf("a read overtaken by an invalidation was returned: %v", old.Reset)
 	}
 	if got := keys.peek("auth-1"); got == nil || got.Reset != windowMonthly {
 		t.Fatal("an older in-flight read replaced the newer reading")

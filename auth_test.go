@@ -5,6 +5,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -17,7 +19,7 @@ func parse(p *authProvider, file, raw string) (pluginapi.AuthParseResponse, erro
 
 func TestParseAuthAcceptsDocumentedSchema(t *testing.T) {
 	p := newAuthProvider(newGuard(nil))
-	out, err := parse(p, "a.json", `{"type":"openrouter","api_key":"  example-key  ","management_api_key":"example-management-key","min_remaining_usd":0.5,"allow_unlimited_key":false,"label":"Example","prefix":"acct","proxy_url":"direct","weight":2,"priority":1,"disabled":false,"note":"host field"}`)
+	out, err := parse(p, "a.json", `{"type":"openrouter","api_key":"  example-key  ","min_remaining_usd":0.5,"allow_unlimited_key":false,"label":"Example","prefix":"acct","proxy_url":"direct","weight":2,"priority":1,"disabled":false,"note":"host field"}`)
 	if err != nil || !out.Handled {
 		t.Fatalf("%v", err)
 	}
@@ -29,7 +31,7 @@ func TestParseAuthAcceptsDocumentedSchema(t *testing.T) {
 		t.Fatalf("host fields %+v", out.Auth)
 	}
 	c, err := credentialsFrom(out.Auth.StorageJSON, out.Auth.Metadata)
-	if err != nil || c.apiKey != exampleKey || c.managementKey != "example-management-key" || c.reserve != 0.5 || c.allowUnlimited {
+	if err != nil || c.apiKey != exampleKey || c.reserve != 0.5 || c.allowUnlimited {
 		t.Fatalf("%+v %v", c, err)
 	}
 }
@@ -54,9 +56,7 @@ func TestParseAuthRejections(t *testing.T) {
 		`{"type":"openrouter","api_key":"   "}`,
 		`{"type":"openrouter","api_key":"` + long + `"}`,
 		`{"type":"openrouter","api_key":"exämple"}`,
-		`{"type":"openrouter","api_key":"example-key","management_api_key":"example-key"}`,
-		`{"type":"openrouter","api_key":"example-key","management_api_key":""}`,
-		`{"type":"openrouter","api_key":"example-key","management_api_key":5}`,
+		`{"type":"openrouter","api_key":"example-key","management_api_key":"other-key"}`,
 		`{"type":"openrouter","api_key":"example-key","min_remaining_usd":-1}`,
 		`{"type":"openrouter","api_key":"example-key","min_remaining_usd":"5"}`,
 		`{"type":"openrouter","api_key":"example-key","min_remaining_usd":1e7}`,
@@ -69,6 +69,16 @@ func TestParseAuthRejections(t *testing.T) {
 		if e := rpcErr(t, err); e.HTTPStatus != 400 || strings.Contains(e.Message, "example-key") || strings.Contains(e.Message, long) {
 			t.Fatalf("%s: %+v", raw, e)
 		}
+	}
+}
+
+// The plugin uses only the regular key; a leftover management_api_key field is
+// refused with a message that names it.
+func TestParseAuthRejectsManagementKeyField(t *testing.T) {
+	_, err := parse(newAuthProvider(newGuard(nil)), "x.json", `{"type":"openrouter","api_key":"example-key","management_api_key":"example-management-key"}`)
+	e := rpcErr(t, err)
+	if e.Code != "invalid_auth" || e.HTTPStatus != 400 || !strings.Contains(e.Message, "management_api_key is not supported") || strings.Contains(e.Message, "example-management-key") {
+		t.Fatalf("%+v", e)
 	}
 }
 
@@ -91,6 +101,40 @@ func TestParseAuthDuplicateKeyAcrossFiles(t *testing.T) {
 	}
 	if _, err := parse(p, "b.json", raw); err != nil {
 		t.Fatalf("released key still owned: %v", err)
+	}
+}
+
+// A key whose owning file was moved or removed passes to the file now holding
+// it; while the owner still exists, the duplicate stays refused.
+func TestParseAuthKeyMovesWithItsFile(t *testing.T) {
+	dir := t.TempDir()
+	oldPath, newPath := filepath.Join(dir, "a.json"), filepath.Join(dir, "b.json")
+	raw := []byte(`{"type":"openrouter","api_key":"example-key"}`)
+	if err := os.WriteFile(oldPath, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := newAuthProvider(newGuard(nil))
+	req := func(path string) pluginapi.AuthParseRequest {
+		return pluginapi.AuthParseRequest{Path: path, FileName: filepath.Base(path), RawJSON: raw}
+	}
+	if _, err := p.ParseAuth(context.Background(), req(oldPath)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.ParseAuth(context.Background(), req(newPath)); rpcErr(t, err).Code != "duplicate_auth" {
+		t.Fatal("a second live file with the same key was accepted")
+	}
+	if err := os.Rename(oldPath, newPath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.ParseAuth(context.Background(), req(newPath)); err != nil {
+		t.Fatalf("renamed auth file refused: %v", err)
+	}
+	// The old name no longer owns anything.
+	if err := os.WriteFile(oldPath, []byte(`{"type":"openrouter","api_key":"other-key"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.ParseAuth(context.Background(), pluginapi.AuthParseRequest{Path: oldPath, FileName: "a.json", RawJSON: []byte(`{"type":"openrouter","api_key":"other-key"}`)}); err != nil {
+		t.Fatal(err)
 	}
 }
 

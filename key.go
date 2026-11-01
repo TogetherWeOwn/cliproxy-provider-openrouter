@@ -22,9 +22,10 @@ type httpDoer interface {
 
 const maxBudgets = 16
 
-// keyReading is one parsed GET /key observation (plus GET /credits when a
-// management key is configured). Money fields are nil when OpenRouter did not
-// report a finite number; the parser never invents a value.
+// keyReading is one parsed GET /key observation, plus GET /credits when that
+// read succeeded (Account is nil otherwise). Money fields are nil when
+// OpenRouter did not report a finite number; the parser never invents a value.
+// The /key usage counters lag real spend: a reading is never real time.
 type keyReading struct {
 	FetchedAt        time.Time
 	Limit, Remaining *float64 // nil Limit: no key limit
@@ -331,10 +332,11 @@ func fetchKey(ctx context.Context, client httpDoer, base, apiKey string, now tim
 	return parseKey(body, now)
 }
 
-// fetchCredits reads GET /credits. Only the optional management key is ever
-// sent here, and nowhere else.
-func fetchCredits(ctx context.Context, client httpDoer, base, managementKey string) (*account, error) {
-	body, err := get(ctx, client, base+"/credits", managementKey)
+// fetchCredits reads GET /credits with the regular API key. OpenRouter
+// documents this endpoint as management-key only, but it answers the regular
+// key too (observed live 2026-11-01); any failure only omits the balance.
+func fetchCredits(ctx context.Context, client httpDoer, base, apiKey string) (*account, error) {
+	body, err := get(ctx, client, base+"/credits", apiKey)
 	if err != nil {
 		return nil, err
 	}

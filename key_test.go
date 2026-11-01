@@ -123,7 +123,7 @@ func TestParseCredits(t *testing.T) {
 	if a, err = parseCredits(fixture(t, "credits_zero.json")); err != nil || a.Credits != 0 {
 		t.Fatalf("%+v %v", a, err)
 	}
-	if _, err = parseCredits(fixture(t, "credits_403_not_management.json")); err == nil {
+	if _, err = parseCredits(fixture(t, "credits_403.json")); err == nil {
 		t.Fatal("error body accepted as credits")
 	}
 }

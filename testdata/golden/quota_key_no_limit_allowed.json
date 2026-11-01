@@ -46,8 +46,8 @@
       "buckets": [
         {
           "window": "Key limit: NOT SET (UNBOUNDED spend)",
-          "remainingFraction": 1,
-          "description": "No credit limit is set; spend is limited only by account credits."
+          "remainingFraction": 0,
+          "description": "No credit limit is set; allow_unlimited_key admits requests and spend is limited only by account credits. Set a key limit at openrouter.ai/settings/keys."
         }
       ]
     }

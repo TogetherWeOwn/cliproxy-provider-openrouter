@@ -4,8 +4,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"math"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 
@@ -17,15 +20,17 @@ import (
 const maxReserveUSD = 1_000_000
 
 // credentials are the plugin-owned auth fields. Keys never appear in errors.
+// The plugin uses only the regular OpenRouter API key: it reads GET /key and
+// GET /credits and runs inference with it.
 type credentials struct {
-	apiKey, managementKey string
-	reserve               float64 // min_remaining_usd
-	allowUnlimited        bool    // allow_unlimited_key
+	apiKey         string
+	reserve        float64 // min_remaining_usd
+	allowUnlimited bool    // allow_unlimited_key
 }
 
 // digest identifies the credential version for caches keyed by auth ID.
 func (c credentials) digest() [32]byte {
-	return sha256.Sum256([]byte(c.apiKey + "\x00" + c.managementKey))
+	return sha256.Sum256([]byte(c.apiKey))
 }
 
 func invalidAuth(message string) *pluginabi.Error {
@@ -38,7 +43,7 @@ func invalidAuth(message string) *pluginabi.Error {
 // Any other top-level field is rejected, so a typo such as "min_remaining"
 // cannot silently drop the spend reserve.
 var (
-	ownFields  = map[string]bool{"type": true, "api_key": true, "management_api_key": true, "min_remaining_usd": true, "allow_unlimited_key": true}
+	ownFields  = map[string]bool{"type": true, "api_key": true, "min_remaining_usd": true, "allow_unlimited_key": true}
 	hostFields = map[string]bool{"label": true, "prefix": true, "proxy_url": true, "weight": true, "priority": true, "disabled": true, "note": true, "headers": true, "request_retry": true, "disable_cooling": true, "excluded_models": true, "excluded_models_hash": true, "websockets": true}
 )
 
@@ -85,17 +90,6 @@ func credentialsFields(fields map[string]any) (credentials, error) {
 	if !validKey(c.apiKey) {
 		return c, invalidAuth("api_key must be 1-256 printable ASCII characters without spaces")
 	}
-	if v, ok := fields["management_api_key"]; ok {
-		m, isString := v.(string)
-		m = strings.TrimSpace(m)
-		if !isString || !validKey(m) {
-			return c, invalidAuth("management_api_key must be 1-256 printable ASCII characters without spaces")
-		}
-		if m == c.apiKey {
-			return c, invalidAuth("management_api_key must differ from api_key")
-		}
-		c.managementKey = m
-	}
 	if v, ok := fields["min_remaining_usd"]; ok {
 		n, isNumber := numberValue(v)
 		if !isNumber || n < 0 || n > maxReserveUSD {
@@ -124,13 +118,27 @@ func credentialsFrom(storage []byte, metadata map[string]any) (credentials, erro
 
 // authProvider adds plugin-field validation and digest-only duplicate
 // detection to the kit API-key provider. Ownership is by file name, so a
-// watcher's repeated parse of one file is safe.
+// watcher's repeated parse of one file is safe. A key whose owning file no
+// longer exists (moved or renamed) passes to the next file that holds it.
 type authProvider struct {
 	kit.APIKeyAuth
 	guard  *guard
 	mu     sync.Mutex
 	files  map[string][32]byte
-	owners map[[32]byte]string
+	owners map[[32]byte]owner
+}
+
+// owner is the auth file that holds a key: its name and, when the host
+// reports it, its path.
+type owner struct{ file, path string }
+
+// gone reports that the owning file was removed, so its key is free.
+func (o owner) gone() bool {
+	if o.path == "" {
+		return false
+	}
+	_, err := os.Stat(o.path)
+	return errors.Is(err, fs.ErrNotExist)
 }
 
 func newAuthProvider(g *guard) *authProvider {
@@ -138,20 +146,20 @@ func newAuthProvider(g *guard) *authProvider {
 		if _, ok := fields["id"]; ok {
 			return invalidAuth("auth identity is derived from the API key")
 		}
+		if _, ok := fields["management_api_key"]; ok {
+			return invalidAuth("management_api_key is not supported; the plugin uses only the regular api_key")
+		}
 		for name := range fields {
 			if !ownFields[name] && !hostFields[name] {
-				return invalidAuth("unknown auth field; expected api_key, management_api_key, min_remaining_usd, allow_unlimited_key and host fields")
+				return invalidAuth("unknown auth field; expected api_key, min_remaining_usd, allow_unlimited_key and host fields")
 			}
 		}
 		c, err := credentialsFields(fields)
 		if err == nil {
 			fields["api_key"] = c.apiKey
-			if c.managementKey != "" {
-				fields["management_api_key"] = c.managementKey
-			}
 		}
 		return err
-	}}, files: make(map[string][32]byte), owners: make(map[[32]byte]string)}
+	}}, files: make(map[string][32]byte), owners: make(map[[32]byte]owner)}
 }
 
 func (p *authProvider) ParseAuth(ctx context.Context, r pluginapi.AuthParseRequest) (pluginapi.AuthParseResponse, error) {
@@ -164,16 +172,19 @@ func (p *authProvider) ParseAuth(ctx context.Context, r pluginapi.AuthParseReque
 	if err != nil {
 		return pluginapi.AuthParseResponse{}, err
 	}
-	digest := sha256.Sum256([]byte(c.apiKey))
+	digest := c.digest()
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if file, ok := p.owners[digest]; ok && file != r.FileName {
-		return pluginapi.AuthParseResponse{}, &pluginabi.Error{Code: "duplicate_auth", Message: "duplicate_auth: the same API key is already configured in another auth file", HTTPStatus: http.StatusBadRequest}
+	if o, ok := p.owners[digest]; ok && o.file != r.FileName {
+		if !o.gone() {
+			return pluginapi.AuthParseResponse{}, &pluginabi.Error{Code: "duplicate_auth", Message: "duplicate_auth: the same API key is already configured in another auth file", HTTPStatus: http.StatusBadRequest}
+		}
+		delete(p.files, o.file)
 	}
 	if old, ok := p.files[r.FileName]; ok && old != digest {
 		delete(p.owners, old)
 	}
-	p.files[r.FileName], p.owners[digest] = digest, r.FileName
+	p.files[r.FileName], p.owners[digest] = digest, owner{file: r.FileName, path: r.Path}
 	return out, nil
 }
 

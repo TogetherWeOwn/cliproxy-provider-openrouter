@@ -21,6 +21,8 @@ type keyState struct {
 	// base overrides the upstream base URL; tests point it at loopback.
 	base string
 	now  func() time.Time
+	// creditsTimeout bounds GET /credits (see read).
+	creditsTimeout time.Duration
 	// onInvalidate also drops the quota card's cached copy.
 	onInvalidate func(authID string)
 	mu           sync.Mutex
@@ -35,16 +37,19 @@ type keyEntry struct {
 	stale  bool
 	gen    uint64
 	flight *keyFlight
+	// latches hold upstream exhaustions (see latch.go), by scope.
+	latches [latchScopes]*latch
 }
 
 type keyFlight struct {
 	done    chan struct{}
+	gen     uint64 // entry generation when the read started
 	reading keyReading
 	err     error
 }
 
 func newKeyState(client httpDoer) *keyState {
-	return &keyState{client: client, now: time.Now, entries: make(map[string]*keyEntry)}
+	return &keyState{client: client, now: time.Now, creditsTimeout: defaultCreditsTimeout, entries: make(map[string]*keyEntry)}
 }
 
 func (k *keyState) endpoint() string {
@@ -66,32 +71,43 @@ func (k *keyState) entryLocked(authID string, c credentials) *keyEntry {
 	return e
 }
 
-// get returns a reading at most keyTTL old, re-reading GET /key (and GET
-// /credits with a management key) when needed. If the re-read fails and
-// maxStale > 0, the last good reading is returned while it is at most
-// maxStale old and has not been invalidated. ctx must carry the proxy
-// setting (kit.WithProxyURL); a waiter's cancellation never fails the shared
-// read.
+// get returns a reading at most keyTTL old, re-reading GET /key and GET
+// /credits when needed. If the re-read fails and maxStale > 0, the last good
+// reading is returned while it is at most maxStale old and has not been
+// invalidated. A shared read that an invalidation overtook is not returned:
+// the caller reads again (bounded). ctx must carry the proxy setting
+// (kit.WithProxyURL); a waiter's cancellation never fails the shared read.
 func (k *keyState) get(ctx context.Context, authID string, c credentials, maxStale time.Duration) (keyReading, error) {
+	for attempt := 1; ; attempt++ {
+		r, superseded, err := k.getOnce(ctx, authID, c, maxStale)
+		if !superseded || attempt >= maxReadAttempts {
+			return r, err
+		}
+	}
+}
+
+// maxReadAttempts bounds re-reads after invalidations overtook a shared read.
+const maxReadAttempts = 3
+
+func (k *keyState) getOnce(ctx context.Context, authID string, c credentials, maxStale time.Duration) (keyReading, bool, error) {
 	k.mu.Lock()
 	e := k.entryLocked(authID, c)
 	if e.good != nil && !e.stale && k.now().Sub(e.good.FetchedAt) < keyTTL {
 		r := *e.good
 		k.mu.Unlock()
-		return r, nil
+		return r, false, nil
 	}
 	f := e.flight
 	if f == nil {
-		f = &keyFlight{done: make(chan struct{})}
+		f = &keyFlight{done: make(chan struct{}), gen: e.gen}
 		e.flight = f
-		gen := e.gen
 		k.mu.Unlock()
 		start := k.now()
 		reading, err := k.read(context.WithoutCancel(ctx), c, start)
 		k.mu.Lock()
 		f.reading, f.err = reading, err
 		// An invalidated or older read never replaces a newer reading.
-		if err == nil && k.entries[authID] == e && e.gen == gen && (e.good == nil || !e.good.FetchedAt.After(start)) {
+		if err == nil && k.entries[authID] == e && e.gen == f.gen && (e.good == nil || !e.good.FetchedAt.After(start)) {
 			e.good, e.stale = &reading, false
 		}
 		if e.flight == f {
@@ -104,32 +120,46 @@ func (k *keyState) get(ctx context.Context, authID string, c credentials, maxSta
 		select {
 		case <-f.done:
 		case <-ctx.Done():
-			return keyReading{}, ctx.Err()
+			return keyReading{}, false, ctx.Err()
 		}
-	}
-	if f.err == nil {
-		return f.reading, nil
 	}
 	k.mu.Lock()
 	defer k.mu.Unlock()
-	if maxStale > 0 && e.good != nil && !e.stale && k.now().Sub(e.good.FetchedAt) <= maxStale {
-		return *e.good, nil
+	if f.err == nil {
+		// The read started before an invalidation: it may predate the limit
+		// error, so it must not admit.
+		return f.reading, k.entries[authID] == e && e.gen != f.gen, nil
 	}
-	return keyReading{}, f.err
+	if maxStale > 0 && e.good != nil && !e.stale && k.now().Sub(e.good.FetchedAt) <= maxStale {
+		return *e.good, false, nil
+	}
+	return keyReading{}, false, f.err
 }
 
+// defaultCreditsTimeout bounds GET /credits, which runs next to GET /key: the
+// balance is optional, so a slow /credits must not hold up admission long.
+const defaultCreditsTimeout = 5 * time.Second
+
+// read fetches GET /key and, concurrently, GET /credits, both with the
+// regular API key. Any /credits failure (401, 403, 5xx, timeout, bad body)
+// only omits the account balance.
 func (k *keyState) read(ctx context.Context, c credentials, start time.Time) (keyReading, error) {
-	reading, err := fetchKey(ctx, k.client, k.endpoint(), c.apiKey, start)
+	base := k.endpoint()
+	creditsCtx, cancel := context.WithTimeout(ctx, k.creditsTimeout)
+	defer cancel()
+	credits := make(chan *account, 1)
+	go func() {
+		a, err := fetchCredits(creditsCtx, k.client, base, c.apiKey)
+		if err != nil {
+			a = nil
+		}
+		credits <- a
+	}()
+	reading, err := fetchKey(ctx, k.client, base, c.apiKey, start)
 	if err != nil {
 		return keyReading{}, err
 	}
-	// The account balance is optional: any /credits failure (including the
-	// 403 for a non-management key) only omits it.
-	if c.managementKey != "" {
-		if a, err := fetchCredits(ctx, k.client, k.endpoint(), c.managementKey); err == nil {
-			reading.Account = a
-		}
-	}
+	reading.Account = <-credits
 	return reading, nil
 }
 

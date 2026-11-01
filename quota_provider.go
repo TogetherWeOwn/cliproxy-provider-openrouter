@@ -75,7 +75,8 @@ var scopeLabels = map[string]string{"member": "member guardrail", "workspace_def
 func keyGroup(r keyReading, c credentials, now time.Time) []pluginapi.QuotaBucket {
 	if r.Limit == nil {
 		if c.allowUnlimited {
-			return []pluginapi.QuotaBucket{{Window: "Key limit: NOT SET (UNBOUNDED spend)", RemainingFraction: 1, Description: "No credit limit is set; spend is limited only by account credits."}}
+			// An unbounded key is never shown as headroom.
+			return []pluginapi.QuotaBucket{{Window: "Key limit: NOT SET (UNBOUNDED spend)", RemainingFraction: 0, Description: "No credit limit is set; allow_unlimited_key admits requests and spend is limited only by account credits. Set a key limit at openrouter.ai/settings/keys."}}
 		}
 		return []pluginapi.QuotaBucket{{Window: "Key limit: NOT SET (plugin refuses requests)", RemainingFraction: 0, Description: "No credit limit is set on this key. Spend is unbounded, so the plugin refuses inference. Set a limit at openrouter.ai/settings/keys or set allow_unlimited_key."}}
 	}

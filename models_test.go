@@ -53,7 +53,7 @@ func TestModelsForAuthFiltersAndPrefixes(t *testing.T) {
 		t.Fatalf("%s %s %v", req.Method, req.URL, req.Headers)
 	}
 	claude := out.Models[0]
-	wantClaude := pluginapi.ModelInfo{ID: "openrouter/anthropic/claude-sonnet-4.5", Object: "model", OwnedBy: provider, Name: "anthropic/claude-sonnet-4.5", Created: 1759161676, DisplayName: "Anthropic: Claude Sonnet 4.5 via OpenRouter", Description: "A normal paid chat model.", ContextLength: 1000000, MaxCompletionTokens: 64000, OutputTokenLimit: 64000, SupportedParameters: []string{"max_tokens", "temperature", "tools"}, SupportedInputModalities: []string{"text", "image", "file"}, SupportedOutputModalities: []string{"text"}}
+	wantClaude := pluginapi.ModelInfo{ID: "openrouter/anthropic/claude-sonnet-4.5", Object: "model", OwnedBy: provider, Name: "openrouter/anthropic/claude-sonnet-4.5", Created: 1759161676, DisplayName: "Anthropic: Claude Sonnet 4.5 via OpenRouter", Description: "A normal paid chat model.", ContextLength: 1000000, MaxCompletionTokens: 64000, OutputTokenLimit: 64000, SupportedParameters: []string{"max_tokens", "temperature", "tools"}, SupportedInputModalities: []string{"text", "image", "file"}, SupportedOutputModalities: []string{"text"}}
 	if !reflect.DeepEqual(claude, wantClaude) {
 		t.Fatalf("mapping\n got %+v\nwant %+v", claude, wantClaude)
 	}
@@ -66,6 +66,27 @@ func TestModelsForAuthFiltersAndPrefixes(t *testing.T) {
 	}
 	if out.Models[1].Thinking != nil {
 		t.Fatal("thinking invented for a non-reasoning model")
+	}
+}
+
+// Every identifier the plugin publishes carries the fixed namespace: the host
+// lists Name as the Gemini model name, and its auth-prefix rewrite only
+// rewrites a Name equal to the ID.
+func TestEveryModelIdentifierIsNamespaced(t *testing.T) {
+	out, err := newTestCatalog(newClock(now0)).ModelsForAuth(context.Background(), modelRequest(&fakeHost{body: fixture(t, "models.json")}))
+	if err != nil || len(out.Models) == 0 {
+		t.Fatal(err)
+	}
+	var alias, free bool
+	for _, m := range out.Models {
+		if !strings.HasPrefix(m.ID, modelPrefix) || m.Name != m.ID {
+			t.Errorf("un-namespaced identifier: ID %q Name %q", m.ID, m.Name)
+		}
+		alias = alias || strings.HasPrefix(m.ID, modelPrefix+"~")
+		free = free || strings.HasSuffix(m.ID, ":free")
+	}
+	if !alias || !free {
+		t.Fatal("fixture must cover ~ aliases and :free variants")
 	}
 }
 

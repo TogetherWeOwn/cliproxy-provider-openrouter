@@ -1,6 +1,8 @@
 # Sources and wire contract
 
-All OpenRouter documents were fetched on 2026-11-01.
+All OpenRouter documents were fetched on 2026-11-01. Where a live response
+(2026-11-01, redacted in `testdata/live_*.json`) differs from the documents,
+the live response wins and is noted below.
 
 ## OpenRouter documentation
 
@@ -13,7 +15,7 @@ All OpenRouter documents were fetched on 2026-11-01.
 
 ## Wire contract used by the plugin
 
-`GET /api/v1/key` (inference key) returns `data` with: `limit`,
+`GET /api/v1/key` (regular key) returns `data` with: `limit`,
 `limit_remaining`, `limit_reset` (`daily`, `weekly`, `monthly` or null),
 `include_byok_in_limit`, `usage`, `usage_daily`, `usage_weekly`,
 `usage_monthly`, the matching `byok_usage*` fields, `is_free_tier`,
@@ -26,8 +28,16 @@ All OpenRouter documents were fetched on 2026-11-01.
 `resets_at` (ISO 8601 UTC or null) and `include_byok`. `label`, `rate_limit`
 (deprecated), creator IDs and regions are ignored and never stored.
 
-`GET /api/v1/credits` (management key only) returns
-`data {total_credits, total_usage}`; a non-management key gets 403.
+`GET /api/v1/credits` returns `data {total_credits, total_usage}`. The
+documents say it needs a management key; live, the regular key gets 200, so
+the plugin reads it with the regular key and omits only the balance on any
+failure. No management key is used.
+
+Live (2026-11-01): `budgets[]` holds a `scope: key_limit` entry whose
+`resets_at` is the key's next reset, and `effective_budget` equals it;
+`limit_reset` is `"weekly"`; the `/key` usage counters lag real spend; a
+`:free` 503 carries `message: "Provider returned error"` and
+`metadata.raw: "no upstreams available"` (an outage, not quota).
 
 `GET /api/v1/models` without query parameters returns the full text catalog:
 `id`, `name`, `created`, `description`, `context_length`,
@@ -52,12 +62,9 @@ monthly on the first at 00:00.
 
 1. A spent key limit is documented as both 402 and 403; the plugin keys on
    `limit_source`.
-2. Whether `budgets[]` contains a `key_limit` entry with `resets_at`.
-3. Whether `limit_remaining` can go negative.
-4. The unit of `X-RateLimit-Reset`.
-5. Whether `budgets` and `effective_budget` are returned for personal keys.
-6. The exact `limit_reset` strings seen live.
-7. The `endpoints[]` contract, the key shape, whether `:free` requests are
+2. Whether `limit_remaining` can go negative.
+3. The unit of `X-RateLimit-Reset`.
+4. The `endpoints[]` contract, the key shape, whether `:free` requests are
    blocked by a spent key limit, and which accounts the in-flight budget covers.
 
 ## Host facts (CLIProxyAPI v8.0.49)
@@ -68,7 +75,9 @@ monthly on the first at 00:00.
 | 401/402/403 cool a model for a fixed 30 minutes; 404 uses the hint or 12 hours; 429 uses max(hint, 10 s) or exponential backoff | `sdk/cliproxy/auth/conductor_cooldown.go` (the status switch in the model-state update) |
 | A 400/404/422 whose message contains `model_not_supported` is a model-support failure | `sdk/cliproxy/auth/conductor_cooldown.go` (`isModelSupportErrorMessage`) |
 | Quota cards are display-only | `internal/api/handlers/management/plugin_quota.go` |
-| The auth `prefix` adds `prefix/<id>` next to each plugin ID; plugin IDs are registered as returned | `sdk/cliproxy/service_models.go` (`applyModelPrefixes`) |
+| The auth `prefix` adds `prefix/<id>` next to each plugin ID; plugin IDs are registered as returned. A model `Name` is rewritten with the prefix only when it equals the ID, so the plugin sets `Name` to the namespaced ID | `sdk/cliproxy/service_models.go` (`applyModelPrefixes`, `rewriteModelInfoName`) |
+| The Gemini model listing emits `Name` (else `ID`) as the model name | `internal/registry/model_registry.go` (the `gemini` case of the model-info conversion) |
+| A 503 cools the model briefly as a transient error | `sdk/cliproxy/auth/conductor_cooldown.go` (the 408/5xx transient branch) |
 | Discovery runs on auth (re)registration and plugin/config reload; the periodic model refresh callback is driven by the built-in remote catalog, not by plugins | `sdk/cliproxy/service_plugins.go` (`refreshPluginModelRegistrations`, `registerModelRefreshCallback`) |
 | The provider name `openrouter` enables OpenRouter-specific reasoning handling and subset token accounting | `internal/thinking/summary.go`; `sdk/cliproxy/usage/accounting.go` |
 | An empty static model list registers no static models and leaves the executor and per-auth discovery in place | `internal/pluginhost/adapters.go` (`RegisterModels`); asserted by the host-compat test |

@@ -99,6 +99,9 @@ func (u *upstream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		default:
 			io.WriteString(w, healthyKey)
 		}
+	case "/credits":
+		// The regular key reads the account balance (observed live).
+		io.WriteString(w, `{"data":{"total_credits":245,"total_usage":237.537304708}}`)
 	case "/models":
 		u.models.Add(1)
 		io.WriteString(w, catalog)
@@ -122,7 +125,7 @@ func (u *upstream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			u.t.Error("a no-limit key reached inference")
 			w.WriteHeader(500)
 			return
-		case "limited-key", "spent-key":
+		case "limited-key", "spent-key", "lagging-key":
 			u.spent.Store(true)
 			w.WriteHeader(403)
 			io.WriteString(w, `{"error":{"code":403,"message":"Key limit exceeded (daily limit).","metadata":{"limit_source":"openrouter_key_limit","scope":"key_limit","resets_at":"`+u.resetAt.Format(time.RFC3339)+`"}}}`)
@@ -248,7 +251,7 @@ func TestRealHostLoader(t *testing.T) {
 		t.Fatalf("persisted auth no longer parses: %v", err)
 	}
 	quota, handled, err := host.FetchQuota(ctx, pluginapi.QuotaFetchRequest{AuthID: auth.ID, Provider: provider, StorageJSON: saved})
-	if err != nil || !handled || len(quota.Groups) != 2 || quota.Groups[0].Buckets[0].RemainingFraction != .42 || quota.Groups[0].Buckets[0].ResetTime == "" {
+	if err != nil || !handled || len(quota.Groups) != 3 || quota.Groups[0].Buckets[0].RemainingFraction != .42 || quota.Groups[0].Buckets[0].ResetTime == "" || quota.Groups[2].DisplayName != "Account credits" {
 		t.Fatalf("quota %+v %v %v", quota, handled, err)
 	}
 
@@ -292,6 +295,10 @@ func TestRealHostLoader(t *testing.T) {
 		published := map[string]bool{}
 		for _, model := range applyModelPrefixes(discovered.Models, acct.Prefix, false) {
 			published[model.ID] = true
+			// Name is the Gemini listing's model name: namespaced as well.
+			if model.Name != model.ID {
+				t.Fatalf("published name %q for ID %q", model.Name, model.ID)
+			}
 		}
 		if !published["acct/openrouter/anthropic/claude-sonnet-4.5"] || !published["openrouter/anthropic/claude-sonnet-4.5"] || published["anthropic/claude-sonnet-4.5"] || published["acct/anthropic/claude-sonnet-4.5"] {
 			t.Fatalf("published IDs %v", published)
@@ -398,6 +405,27 @@ func TestRealHostLoader(t *testing.T) {
 		got, _ = mgr.GetByID(limited.ID)
 		if !near(got.ModelStates[modelB]) {
 			t.Fatalf("guard refusal lost the reset: %+v", got.ModelStates[modelB])
+		}
+	})
+
+	t.Run("lagging key counters: other models are still refused locally until the reset", func(t *testing.T) {
+		mgr := coreauth.NewManager(nil, nil, nil)
+		mgr.SetRetryConfig(0, 0, 1)
+		mgr.RegisterExecutor(ex)
+		lagging := register(t, mgr, parse("lagging.json", `{"type":"openrouter","api_key":"lagging-key"}`), "lagging-auth", "0", modelA, modelB)
+		if _, err := mgr.Execute(ctx, []string{provider}, call(modelA, ""), opts); statusOf(err) != 429 || up.chatCount("lagging-key") != 1 {
+			t.Fatalf("exhaustion %v calls=%d", err, up.chatCount("lagging-key"))
+		}
+		// GET /key still reports headroom, yet modelB is refused with no
+		// upstream call and cools until the same reset.
+		_, err := mgr.Execute(ctx, []string{provider}, call(modelB, ""), opts)
+		if statusOf(err) != 429 || up.chatCount("lagging-key") != 1 {
+			t.Fatalf("latch did not refuse the other model: %v calls=%d", err, up.chatCount("lagging-key"))
+		}
+		got, _ := mgr.GetByID(lagging.ID)
+		state := got.ModelStates[modelB]
+		if state == nil || !state.Quota.Exceeded || state.NextRetryAfter.Before(up.resetAt.Add(-3*time.Second)) || state.NextRetryAfter.After(up.resetAt.Add(3*time.Second)) {
+			t.Fatalf("latch refusal lost the reset: %+v", state)
 		}
 	})
 

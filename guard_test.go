@@ -88,7 +88,7 @@ func TestGuardReserveBoundary(t *testing.T) {
 func TestGuardBindingIsTheMinimumLayer(t *testing.T) {
 	h := newHarness(t, fixture(t, "key_monthly_limit.json")) // key 10.5 monthly
 	h.srv.credits = []byte(`{"data":{"total_credits":100,"total_usage":99.5}}`)
-	c := credentials{apiKey: exampleKey, managementKey: "example-management-key", reserve: 1}
+	c := credentials{apiKey: exampleKey, reserve: 1}
 	// Only the account balance (0.5) is under the reserve: no reset, hourly re-check.
 	if e := rpcErr(t, admitWith(h, c, "a/b")); e.Code != "quota_exhausted" || e.RetryAfterSeconds != 3600 || !strings.Contains(e.Message, "reserve") {
 		t.Fatalf("account layer: %+v", e)
@@ -105,7 +105,7 @@ func TestGuardBindingIsTheMinimumLayer(t *testing.T) {
 		t.Fatalf("all layers above reserve: %v", err)
 	}
 	for _, seen := range h.srv.seen() {
-		if strings.HasPrefix(seen, "/credits") && seen != "/credits Bearer example-management-key" || strings.HasPrefix(seen, "/key") && seen != "/key Bearer "+exampleKey {
+		if seen != "/credits Bearer "+exampleKey && seen != "/key Bearer "+exampleKey {
 			t.Fatalf("key sent to the wrong endpoint: %q", seen)
 		}
 	}
@@ -223,7 +223,9 @@ func TestGuardFreeModelCooldownIsPerModel(t *testing.T) {
 func TestGuardUsesObservedHostProxy(t *testing.T) {
 	var seen atomic.Value
 	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		seen.Store(r.URL.String())
+		if strings.HasSuffix(r.URL.Path, "/key") {
+			seen.Store(r.URL.String())
+		}
 		_, _ = w.Write(fixture(t, "key_monthly_limit.json"))
 	}))
 	defer proxy.Close()

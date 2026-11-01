@@ -53,11 +53,23 @@ func (e executor) passthrough(authID, model string, stream *bool) kit.Passthroug
 	}
 }
 
+// classify maps an upstream failure and applies its effect: an exhaustion
+// latches the auth (or its :free models) until the retry time, before the
+// reading is invalidated, so no admission slips between the two.
 func (e executor) classify(authID, model string, resp pluginapi.HTTPResponse) error {
-	err, invalidate := classifyFailure(resp, e.now(), e.keys.peek(authID), model)
-	if invalidate && authID != "" {
-		e.keys.invalidate(authID)
+	now := e.now()
+	err, eff := classifyFailure(resp, now, e.keys.peek(authID), model)
+	if eff == effectNone || authID == "" {
+		return err
 	}
+	until := now.Add(time.Duration(err.RetryAfterSeconds) * time.Second)
+	switch eff {
+	case effectSpend:
+		e.keys.latch(authID, latchSpend, until)
+	case effectFree:
+		e.keys.latch(authID, latchFree, until)
+	}
+	e.keys.invalidate(authID)
 	return err
 }
 

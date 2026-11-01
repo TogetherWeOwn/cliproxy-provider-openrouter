@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -12,8 +13,8 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 )
 
-// Both GET /key and GET /credits follow the host's proxy policy: the auth's
-// proxy_url, else the host's proxy-url.
+// Both GET /key and GET /credits (both with the regular key) follow the
+// host's proxy policy: the auth's proxy_url, else the host's proxy-url.
 func TestQuotaPollUsesAuthOrHostProxy(t *testing.T) {
 	recorder := func() (*httptest.Server, func() []string) {
 		var mu sync.Mutex
@@ -40,16 +41,18 @@ func TestQuotaPollUsesAuthOrHostProxy(t *testing.T) {
 	q := newQuotaProvider(keys, newGuard(keys))
 	host := pluginapi.HostConfigSummary{ProxyURL: hostProxy.URL}
 	for _, r := range []pluginapi.QuotaFetchRequest{
-		{AuthID: "a", StorageJSON: []byte(`{"api_key":"one","management_api_key":"one-management"}`), Metadata: map[string]any{"proxy_url": authProxy.URL}, Host: host},
-		{AuthID: "b", StorageJSON: []byte(`{"api_key":"two","management_api_key":"two-management"}`), Host: host},
+		{AuthID: "a", StorageJSON: []byte(`{"api_key":"one"}`), Metadata: map[string]any{"proxy_url": authProxy.URL}, Host: host},
+		{AuthID: "b", StorageJSON: []byte(`{"api_key":"two"}`), Host: host},
 	} {
 		out, err := q.FetchQuota(context.Background(), r)
 		if err != nil || len(out.Groups) != 3 {
 			t.Fatalf("%s: %+v %v", r.AuthID, out, err)
 		}
 	}
-	want := []string{"http://openrouter.invalid/api/v1/key", "http://openrouter.invalid/api/v1/credits"}
+	// /key and /credits are read concurrently, so their order is not fixed.
+	want := []string{"http://openrouter.invalid/api/v1/credits", "http://openrouter.invalid/api/v1/key"}
 	for name, got := range map[string][]string{"auth": authSeen(), "host": hostSeen()} {
+		sort.Strings(got)
 		if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
 			t.Fatalf("%s proxy saw %v", name, got)
 		}
