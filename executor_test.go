@@ -213,3 +213,19 @@ func TestFreeModelNoUpstreamsIsUnavailable(t *testing.T) {
 		t.Fatalf("an outage must not latch the free models: %v", err)
 	}
 }
+
+// Raw HTTP requests get the same error-only 200 handling as Execute.
+func TestHttpRequestErrorOnlySuccessBodyIsClassified(t *testing.T) {
+	h := newHarness(t, fixture(t, "key_monthly_limit.json"))
+	host := &fakeHost{body: fixture(t, "ok_200_error_only.json"), headers: http.Header{"Retry-After": {"4"}}}
+	_, err := h.exec.HttpRequest(context.Background(), pluginapi.ExecutorHTTPRequest{AuthID: "auth-1", Body: []byte(`{"model":"openrouter/a/b"}`), StorageJSON: storage(""), HTTPClient: host})
+	if e := rpcErr(t, err); e.HTTPStatus != 429 || e.Code != "rate_limited" || e.RetryAfterSeconds != 4 {
+		t.Fatalf("%+v", e)
+	}
+	sse := fixture(t, "ok_stream_processing_comments.sse")
+	host = &fakeHost{body: sse}
+	out, err := h.exec.HttpRequest(context.Background(), pluginapi.ExecutorHTTPRequest{AuthID: "auth-1", Body: []byte(`{"model":"openrouter/a/b","stream":true}`), StorageJSON: storage(""), HTTPClient: host})
+	if err != nil || !bytes.Equal(out.Body, sse) {
+		t.Fatalf("stream body altered: %v", err)
+	}
+}

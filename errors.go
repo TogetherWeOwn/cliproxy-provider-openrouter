@@ -114,18 +114,28 @@ func resetRetry(server *time.Time, w window, now time.Time) int {
 // effect is what an upstream failure means for the auth's key state.
 type effect int
 
+// Every effect except effectNone re-reads GET /key before the next
+// admission. From effectKeyLimit on, the auth is also latched until the
+// retry time (latch.go); the kind names the cap whose change lifts it.
 const (
 	effectNone effect = iota
-	// effectReread: a limit-related result; re-read GET /key before the next
-	// admission.
+	// effectReread: a transient or request-scoped limit result.
 	effectReread
-	// effectSpend: a spend cap is spent; re-read and latch every model of the
-	// auth until the retry time.
-	effectSpend
-	// effectFree: the daily free-model requests are used up; re-read and
-	// latch the auth's ":free" models until the retry time.
+	// effectKeyLimit: the key's credit limit is spent (every model).
+	effectKeyLimit
+	// effectBudget: a guardrail or workspace budget is spent (every model).
+	effectBudget
+	// effectCredits: the account credits are spent (every model).
+	effectCredits
+	// effectLimit: another spend limit is reached (every model).
+	effectLimit
+	// effectFree: the daily free-model requests are used up (":free" only).
 	effectFree
+	effectKinds
 )
+
+// latches reports an exhaustion that latches the auth.
+func (e effect) latches() bool { return e >= effectKeyLimit && e < effectKinds }
 
 // classifyFailure maps an upstream failure to a public error (see the README
 // table) and its effect on the auth's key state. reading is the last good
@@ -136,8 +146,8 @@ func classifyFailure(resp pluginapi.HTTPResponse, now time.Time, reading *keyRea
 	u, isJSON := parseUpstreamError(resp.Body)
 	// A known exhaustion is never shortened by a shorter Retry-After; a
 	// longer server hint wins.
-	exhausted := func(message string, retry int) (*pluginabi.Error, effect) {
-		return quotaExhausted(message, max(retry, retryAfter)), effectSpend
+	exhausted := func(message string, retry int, kind effect) (*pluginabi.Error, effect) {
+		return quotaExhausted(message, max(retry, retryAfter)), kind
 	}
 	payment := status == http.StatusPaymentRequired
 	limitStatus := payment || status == http.StatusForbidden
@@ -150,11 +160,11 @@ func classifyFailure(resp pluginapi.HTTPResponse, now time.Time, reading *keyRea
 				server = reading.KeyResetsAt
 			}
 		}
-		return exhausted("OpenRouter key credit limit reached", resetRetry(server, w, now))
+		return exhausted("OpenRouter key credit limit reached", resetRetry(server, w, now), effectKeyLimit)
 	case limitStatus && u.limitSource == "openrouter_guardrail_budget":
-		return exhausted("OpenRouter guardrail budget reached", resetRetry(u.resetsAt, windowUnknown, now))
+		return exhausted("OpenRouter guardrail budget reached", resetRetry(u.resetsAt, windowUnknown, now), effectBudget)
 	case limitStatus && u.limitSource == "openrouter_workspace_budget":
-		return exhausted("OpenRouter workspace budget reached", resetRetry(u.resetsAt, windowUnknown, now))
+		return exhausted("OpenRouter workspace budget reached", resetRetry(u.resetsAt, windowUnknown, now), effectBudget)
 	case limitStatus && (u.limitSource == "openrouter_in_flight_budget" || u.reason == "in_flight_budget_exhausted"):
 		retry := retryAfter
 		if retry <= 0 {
@@ -164,9 +174,9 @@ func classifyFailure(resp pluginapi.HTTPResponse, now time.Time, reading *keyRea
 	case payment && u.limitSource == "openrouter_credits" && u.reason == "weight_exceeds_budget":
 		return failure(http.StatusBadRequest, "request_exceeds_budget", "request is too expensive for the OpenRouter spending budget; lower max_tokens or the prompt", 0), effectReread
 	case payment:
-		return exhausted("OpenRouter account credits exhausted", recheckSeconds)
+		return exhausted("OpenRouter account credits exhausted", recheckSeconds, effectCredits)
 	case status == http.StatusForbidden && u.limitSource != "":
-		return exhausted("OpenRouter spend limit reached", resetRetry(u.resetsAt, windowUnknown, now))
+		return exhausted("OpenRouter spend limit reached", resetRetry(u.resetsAt, windowUnknown, now), effectLimit)
 	case status == http.StatusUnauthorized:
 		return failure(status, "invalid_credentials", "OpenRouter rejected the API key", 0), effectNone
 	case status == http.StatusForbidden && (policyErrorTypes[u.errorType] || strings.Contains(u.message, "moderation")):
@@ -184,7 +194,7 @@ func classifyFailure(resp pluginapi.HTTPResponse, now time.Time, reading *keyRea
 		// while the last reading already showed none left (the counters lag,
 		// so the message is the reliable signal).
 		if strings.Contains(u.message, "free-models-per-day") || (strings.HasSuffix(model, ":free") && reading != nil && reading.Free != nil && reading.Free.Remaining <= 0) {
-			return quotaExhausted("OpenRouter daily free-model requests used up", max(retrySeconds(nextUTCDay(now), now), retryAfter)), effectFree
+			return exhausted("OpenRouter daily free-model requests used up", retrySeconds(nextUTCDay(now), now), effectFree)
 		}
 		retry := retryAfter
 		if retry <= 0 {

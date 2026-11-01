@@ -29,18 +29,21 @@ const maxBudgets = 16
 type keyReading struct {
 	FetchedAt        time.Time
 	Limit, Remaining *float64 // nil Limit: no key limit
-	Reset            window
-	KeyResetsAt      *time.Time // budgets[scope=key_limit].resets_at
-	IncludeBYOK      bool
-	Usage            [4]*float64 // total, daily, weekly, monthly
-	BYOK             [4]*float64
-	FreeTier         bool
-	Management       bool
-	ExpiresAt        *time.Time
-	Free             *freeRequests
-	Budgets          []budget // excludes scope=key_limit
-	Effective        *budget
-	Account          *account
+	// LimitMalformed: "limit" is present but neither null nor a finite
+	// number. The guard fails closed instead of treating it as no limit.
+	LimitMalformed bool
+	Reset          window
+	KeyResetsAt    *time.Time // budgets[scope=key_limit].resets_at
+	IncludeBYOK    bool
+	Usage          [4]*float64 // total, daily, weekly, monthly
+	BYOK           [4]*float64
+	FreeTier       bool
+	Management     bool
+	ExpiresAt      *time.Time
+	Free           *freeRequests
+	Budgets        []budget // excludes scope=key_limit
+	Effective      *budget
+	Account        *account
 }
 
 const (
@@ -233,6 +236,9 @@ func parseKey(raw []byte, fetchedAt time.Time) (keyReading, error) {
 		return keyReading{}, invalidQuota()
 	}
 	r := keyReading{FetchedAt: fetchedAt, Limit: d.num("limit"), Remaining: d.num("limit_remaining"), IncludeBYOK: d.boolean("include_byok_in_limit"), FreeTier: d.boolean("is_free_tier")}
+	if raw, ok := d["limit"]; ok && !isNull(raw) && r.Limit == nil {
+		r.LimitMalformed = true
+	}
 	r.Management = d.boolean("is_management_key") || d.boolean("is_provisioning_key")
 	reset, present := d.str("limit_reset")
 	if _, exists := d["limit_reset"]; exists && !present {

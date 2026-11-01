@@ -62,12 +62,8 @@ func (e executor) classify(authID, model string, resp pluginapi.HTTPResponse) er
 	if eff == effectNone || authID == "" {
 		return err
 	}
-	until := now.Add(time.Duration(err.RetryAfterSeconds) * time.Second)
-	switch eff {
-	case effectSpend:
-		e.keys.latch(authID, latchSpend, until)
-	case effectFree:
-		e.keys.latch(authID, latchFree, until)
+	if eff.latches() {
+		e.keys.latch(authID, eff, now.Add(time.Duration(err.RetryAfterSeconds)*time.Second))
 	}
 	e.keys.invalidate(authID)
 	return err
@@ -93,7 +89,19 @@ func (e executor) ExecuteStream(ctx context.Context, r pluginapi.ExecutorRequest
 }
 
 func (e executor) HttpRequest(ctx context.Context, r pluginapi.ExecutorHTTPRequest) (pluginapi.ExecutorHTTPResponse, error) {
-	return e.passthrough(r.AuthID, upstreamModel(r.Body), nil).HttpRequest(ctx, r)
+	model := upstreamModel(r.Body)
+	out, err := e.passthrough(r.AuthID, model, nil).HttpRequest(ctx, r)
+	if err != nil {
+		return pluginapi.ExecutorHTTPResponse{}, err
+	}
+	// As in Execute: a 2xx JSON body holding only an error is a failure. A
+	// stream body is not a JSON object, so it passes through.
+	if out.StatusCode >= 200 && out.StatusCode < 300 {
+		if status, ok := errorOnlyStatus(out.Body); ok {
+			return pluginapi.ExecutorHTTPResponse{}, e.classify(r.AuthID, model, pluginapi.HTTPResponse{StatusCode: status, Headers: out.Headers, Body: out.Body})
+		}
+	}
+	return out, nil
 }
 
 func (e executor) CountTokens(ctx context.Context, r pluginapi.ExecutorRequest) (pluginapi.ExecutorResponse, error) {

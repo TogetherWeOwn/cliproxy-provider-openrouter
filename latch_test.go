@@ -123,3 +123,38 @@ func TestLatchIsPerCredential(t *testing.T) {
 		t.Fatalf("a rotated key inherited the latch: %v", err)
 	}
 }
+
+// Buying account credits does not lift a spent key limit: only a change to
+// the key's own limit or window does.
+func TestTopUpDoesNotLiftAKeyLimitLatch(t *testing.T) {
+	h := liveHarness(t)
+	_ = execute(h, &fakeHost{status: 402, body: []byte(keyLimitNoReset)}, "a/b")
+	h.srv.mu.Lock()
+	h.srv.credits = []byte(`{"data":{"total_credits":300,"total_usage":237.537304708}}`)
+	h.srv.mu.Unlock()
+	h.clock.advance(keyTTL + time.Second)
+	ok := &fakeHost{body: []byte(`{"choices":[{"index":0}]}`)}
+	if e := rpcErr(t, execute(h, ok, "a/b")); e.Code != "quota_exhausted" || len(ok.calls()) != 0 {
+		t.Fatalf("a top-up lifted the key-limit latch: %+v", e)
+	}
+}
+
+// A raised daily free-model allowance lifts the free latch; a changed key
+// limit does not.
+func TestFreeLatchLiftsOnlyWhenTheFreeAllowanceRises(t *testing.T) {
+	h := liveHarness(t)
+	_ = execute(h, &fakeHost{status: 429, body: fixture(t, "err_429_free.json")}, "vendor/model:free")
+	ok := &fakeHost{body: []byte(`{"choices":[{"index":0}]}`)}
+	live := string(fixture(t, "live_key_inference.json"))
+	h.srv.set([]byte(strings.Replace(live, `"limit": 5,`, `"limit": 10,`, 1)), 200)
+	h.clock.advance(keyTTL + time.Second)
+	if rpcErr(t, execute(h, ok, "vendor/model:free")).Code != "quota_exhausted" {
+		t.Fatal("a key-limit change lifted the free latch")
+	}
+	raised := strings.Replace(live, `"limit": 1000,`, `"limit": 2000,`, 1)
+	h.srv.set([]byte(raised), 200)
+	h.clock.advance(keyTTL + time.Second)
+	if err := execute(h, ok, "vendor/model:free"); err != nil {
+		t.Fatalf("a raised free allowance stayed latched: %v", err)
+	}
+}

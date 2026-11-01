@@ -91,9 +91,9 @@ func (g *guard) admit(ctx context.Context, authID string, c credentials, storage
 	if err = decide(reading, c, model, now); err != nil {
 		return err
 	}
-	if until, scope, ok := g.keys.latched(authID, reading, model, now); ok {
+	if until, kind, ok := g.keys.latched(authID, reading, model, now); ok {
 		message := "OpenRouter reported a spent limit; waiting for its reset"
-		if scope == latchFree {
+		if kind == effectFree {
 			message = "OpenRouter daily free-model requests used up"
 		}
 		return quotaExhausted(message, retrySeconds(until, now))
@@ -115,6 +115,9 @@ func decide(r keyReading, c credentials, model string, now time.Time) error {
 	if r.Management {
 		return managementKeyError()
 	}
+	if r.LimitMalformed {
+		return quotaUnverified() // an unreadable limit is not "no limit"
+	}
 	if r.Limit == nil && !c.allowUnlimited {
 		return keyLimitRequired()
 	}
@@ -127,7 +130,11 @@ func decide(r keyReading, c credentials, model string, now time.Time) error {
 		layers = append(layers, limitLayer{*r.Remaining, reset, ok})
 	}
 	if r.Effective != nil {
-		if rem := r.Effective.remaining(); rem != nil {
+		rem := r.Effective.remaining()
+		if rem == nil && r.Effective.Limit != nil {
+			return quotaUnverified() // a binding budget without a remaining amount cannot be bounded
+		}
+		if rem != nil {
 			reset, ok := resolveReset(r.Effective.ResetsAt, r.Effective.Interval, now)
 			layers = append(layers, limitLayer{*rem, reset, ok})
 		}

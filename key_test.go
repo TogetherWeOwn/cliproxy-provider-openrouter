@@ -45,7 +45,7 @@ func TestParseKeyFixtures(t *testing.T) {
 		{"key_provisioning_legacy.json", keyReading{Reset: windowLifetime, Management: true, Usage: usage(f(0), nil, nil, nil)}},
 		{"key_expiring.json", keyReading{Limit: f(50), Remaining: f(50), Reset: windowMonthly, Usage: usage(f(0), f(0), f(0), f(0)), ExpiresAt: ptr(utc("2026-11-07T03:30:00Z"))}},
 		// Wrong types read as absent; a wrong-typed limit_reset is unknown, not lifetime.
-		{"key_wrong_types.json", keyReading{Reset: windowUnknown}},
+		{"key_wrong_types.json", keyReading{Reset: windowUnknown, LimitMalformed: true}},
 		{"key_extra_unknown_fields.json", keyReading{Limit: f(8), Remaining: f(6), Reset: windowWeekly, Usage: usage(f(2), f(1), f(2), f(2))}},
 	} {
 		got, err := parseKey(fixture(t, tc.file), now0)

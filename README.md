@@ -142,7 +142,9 @@ on a bad proxy). OpenRouter documents `/credits` as management-key only, but it
 answers the regular key (seen live). If `/credits` fails for any reason (401,
 403, 5xx, timeout, bad body), only the account-balance bucket and its guard
 layer are omitted; everything else still works. Readings are cached 60 s per
-auth and shared with the guard; errors are never cached.
+auth, never past the first reset after they were taken (the next 00:00 UTC, or
+an earlier `resets_at` of the key limit or effective budget), and shared with
+the guard; errors are never cached.
 
 ### Buckets
 
@@ -150,6 +152,7 @@ auth and shared with the guard; errors are never cached.
 |---|---|---|---|
 | Key credit limit | `<daily\|weekly\|monthly\|lifetime\|unknown-reset> key limit` | `limit_remaining / limit`, clamped to 0-1 | `budgets[scope=key_limit].resets_at` when plausible, else the UTC calendar rule; none for lifetime/unknown |
 | Key credit limit | `Key limit: NOT SET (plugin refuses requests)` | 0 | none |
+| Key credit limit | `Key limit: UNREADABLE (plugin refuses requests)` (`limit` present but not a number) | 0 | none |
 | Key credit limit | `Key limit: NOT SET (UNBOUNDED spend)` (with `allow_unlimited_key`) | 0 (an unbounded key is never shown as headroom) | none |
 | Budgets | `<interval> <member guardrail\|key guardrail\|workspace\|unknown> budget`, one per `budgets[]` entry except `key_limit` (max 16) | `remaining_usd / limit_usd` (or `limit_usd - spend_usd`) | `resets_at`, else the calendar rule |
 | Free models (:free) | `daily free-model requests` (when the daily limit is above 0) | `remaining / limit` | next 00:00 UTC |
@@ -185,7 +188,7 @@ The cap that governs a window is a bucket above, with its reset.
 
 Money metrics use format `currency` and currency `USD`. A metric is emitted only
 when its source is a finite number; fields of the wrong JSON type read as absent.
-The subscription tier is `NO KEY LIMIT`, `free tier` or `paid credits`. A
+The subscription tier is `KEY LIMIT UNREADABLE`, `NO KEY LIMIT`, `free tier` or `paid credits`. A
 management key used as `api_key` is reported as `invalid_credentials`.
 
 ### Reset rules
@@ -204,7 +207,7 @@ in order:
 
 | Rule | Condition | Result |
 |---|---|---|
-| G0 | No reading, a failed re-read with no good reading from the last 10 minutes, or the host proxy not yet known | `429 quota_unverified`, retry 60 s |
+| G0 | No reading, a failed re-read with no good reading from the last 10 minutes (and none from before a reset), every re-read overtaken by a newer limit error, a `limit` that is present but not a number, an effective budget with a limit but no remaining amount, or the host proxy not yet known | `429 quota_unverified`, retry 60 s |
 | G1 | The key is a management key | `401 invalid_credentials` |
 | G2 | No key limit and `allow_unlimited_key` is false | `403 key_limit_required` |
 | G3 | The lowest of key remaining, effective-budget remaining and account balance is at or below `min_remaining_usd` | `429 quota_exhausted`; the retry is the longest wait among the blocking layers: until its reset, or 3600 s for a layer that never resets (lifetime, unknown, account balance) |
@@ -217,12 +220,15 @@ so the next request re-reads it.
 
 Because the `/key` counters lag, a re-read right after OpenRouter reported a
 spent limit can still show money left. So every upstream exhaustion also sets a
-per-auth **latch** until its retry time: a key limit, budget or credit error
-latches every model of the auth; the daily free-model quota latches only its
-`:free` models. A latch ends early only when a later reading shows the owner
-changed a cap: the key limit or its reset window, the effective budget's limit,
-or a top-up in `total_credits`. A reading that merely still shows money left
-does not end it. Latches live in memory and start over on a key change or a
+per-auth **latch** until its retry time: a key limit, budget, credit or other
+spend-limit error latches every model of the auth; the daily free-model quota
+latches only its `:free` models. A latch ends early only when a later reading
+shows the owner changed the cap that failed: the key limit or its reset window
+for a key-limit latch, the effective budget's limit for a budget latch, a
+top-up in `total_credits` for a credit latch, a higher daily free-model limit
+for a free latch (any of the first three for another spend limit). A top-up
+does not lift a spent key limit, and a reading that merely still shows money
+or requests left does not end any latch. Latches live in memory and start over on a key change or a
 plugin restart.
 
 ## Failure classification
@@ -253,7 +259,8 @@ Only the first 64 KiB of an error body is parsed. A `Retry-After` never shortens
 a known exhaustion; a longer one wins. `X-RateLimit-Reset` units are not
 documented: values from 1e12 are read as epoch milliseconds, from 1e9 as epoch
 seconds, else as seconds to wait. A non-streaming `200` whose body is only an
-`error` object (no choices) is classified as if its `error.code` were the status.
+`error` object (no choices) is classified as if its `error.code` were the status,
+on both the Execute and the raw HTTP path.
 In the pinned host, `request_exceeds_budget` and `content_policy` cause no
 cooldown (verified by the host-compat test).
 

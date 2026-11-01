@@ -73,6 +73,9 @@ func resetText(server *time.Time, w window, now time.Time) string {
 var scopeLabels = map[string]string{"member": "member guardrail", "workspace_default_member": "member guardrail", "api_key": "key guardrail", "workspace_default_key": "key guardrail", "workspace": "workspace"}
 
 func keyGroup(r keyReading, c credentials, now time.Time) []pluginapi.QuotaBucket {
+	if r.LimitMalformed {
+		return []pluginapi.QuotaBucket{{Window: "Key limit: UNREADABLE (plugin refuses requests)", RemainingFraction: 0, Description: "OpenRouter reported a key limit that is not a number."}}
+	}
 	if r.Limit == nil {
 		if c.allowUnlimited {
 			// An unbounded key is never shown as headroom.
@@ -134,6 +137,8 @@ func money(key, label string, v *float64) []pluginapi.QuotaMetric {
 func normalizeQuota(r keyReading, c credentials, now time.Time) pluginapi.QuotaFetchResponse {
 	out := pluginapi.QuotaFetchResponse{Subscription: &pluginapi.QuotaSubscription{Plan: "OpenRouter", TierName: "paid credits"}}
 	switch {
+	case r.LimitMalformed:
+		out.Subscription.TierName = "KEY LIMIT UNREADABLE"
 	case r.Limit == nil:
 		out.Subscription.TierName = "NO KEY LIMIT"
 	case r.FreeTier:

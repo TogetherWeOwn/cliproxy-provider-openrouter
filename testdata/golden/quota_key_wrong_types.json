@@ -1,16 +1,16 @@
 {
   "subscription": {
     "plan": "OpenRouter",
-    "tierName": "NO KEY LIMIT"
+    "tierName": "KEY LIMIT UNREADABLE"
   },
   "groups": [
     {
       "displayName": "Key credit limit",
       "buckets": [
         {
-          "window": "Key limit: NOT SET (plugin refuses requests)",
+          "window": "Key limit: UNREADABLE (plugin refuses requests)",
           "remainingFraction": 0,
-          "description": "No credit limit is set on this key. Spend is unbounded, so the plugin refuses inference. Set a limit at openrouter.ai/settings/keys or set allow_unlimited_key."
+          "description": "OpenRouter reported a key limit that is not a number."
         }
       ]
     }

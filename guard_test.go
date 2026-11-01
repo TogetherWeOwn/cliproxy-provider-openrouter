@@ -242,3 +242,81 @@ func TestGuardUsesObservedHostProxy(t *testing.T) {
 		t.Fatalf("host proxy not used: %q", got)
 	}
 }
+
+// A cached reading never outlives the reset after it was taken: an exhausted
+// daily key read at 23:59:45 is re-read at 00:00:05 instead of cooling the
+// model for another day.
+func TestCachedReadingExpiresAtTheReset(t *testing.T) {
+	h := newHarness(t, []byte(`{"data":{"limit":2,"limit_remaining":0,"limit_reset":"daily","free_model_daily_requests":{"used":50,"limit":50,"remaining":0}}}`))
+	h.clock = newClock(utc("2026-11-04T23:59:45Z"))
+	h.keys.now, h.guard.now = h.clock.now, h.clock.now
+	c := credentials{apiKey: exampleKey}
+	if e := rpcErr(t, admitWith(h, c, "a/b")); e.Code != "quota_exhausted" || e.RetryAfterSeconds != 15 {
+		t.Fatalf("%+v", e)
+	}
+	h.srv.set([]byte(`{"data":{"limit":2,"limit_remaining":2,"limit_reset":"daily","free_model_daily_requests":{"used":0,"limit":50,"remaining":50}}}`), 200)
+	h.clock.advance(20 * time.Second)
+	if err := admitWith(h, c, "vendor/model:free"); err != nil || h.srv.keyCalls.Load() != 2 {
+		t.Fatalf("a reading from before the reset was reused: %v calls=%d", err, h.srv.keyCalls.Load())
+	}
+}
+
+func TestReadingBoundary(t *testing.T) {
+	at := utc("2026-11-04T10:00:00Z")
+	noon := utc("2026-11-04T12:00:00Z")
+	past := utc("2026-11-04T09:00:00Z")
+	for _, tc := range []struct {
+		r    keyReading
+		want time.Time
+	}{
+		{keyReading{FetchedAt: at}, utc("2026-11-05T00:00:00Z")},
+		{keyReading{FetchedAt: at, Effective: &budget{ResetsAt: &noon}}, noon},
+		{keyReading{FetchedAt: at, KeyResetsAt: &noon}, noon},
+		{keyReading{FetchedAt: at, KeyResetsAt: &past}, utc("2026-11-05T00:00:00Z")},
+	} {
+		if got := tc.r.boundary(); !got.Equal(tc.want) {
+			t.Errorf("boundary %v want %v", got, tc.want)
+		}
+	}
+}
+
+// A malformed limit is not "no limit", even with allow_unlimited_key, and a
+// binding budget without a remaining amount cannot be bounded.
+func TestGuardFailsClosedOnUnreadableCaps(t *testing.T) {
+	for _, body := range []string{
+		`{"data":{"limit":"25","limit_remaining":10,"limit_reset":"monthly"}}`,
+		`{"data":{"limit":{},"limit_remaining":10}}`,
+		`{"data":{"limit":null,"effective_budget":{"scope":"member","limit_usd":10,"remaining_usd":null,"spend_usd":null}}}`,
+	} {
+		h := newHarness(t, []byte(body))
+		if e := rpcErr(t, admitWith(h, credentials{apiKey: exampleKey, allowUnlimited: true}, "a/b")); e.Code != "quota_unverified" {
+			t.Fatalf("%s: %+v", body, e)
+		}
+	}
+	h := newHarness(t, []byte(`{"data":{"limit":null,"effective_budget":{"scope":"member","limit_usd":null}}}`))
+	if err := admitWith(h, credentials{apiKey: exampleKey, allowUnlimited: true}, "a/b"); err != nil {
+		t.Fatalf("an uncapped effective budget refused: %v", err)
+	}
+}
+
+// A shared read overtaken by a limit error is never returned; when every
+// attempt is overtaken, the read fails closed.
+func TestRepeatedlySupersededReadFailsClosed(t *testing.T) {
+	var keys *keyState
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/key") {
+			keys.invalidate("auth-1") // a limit error lands during every read
+		}
+		_, _ = w.Write(fixture(t, "key_monthly_limit.json"))
+	}))
+	defer srv.Close()
+	client := kit.NewQuotaHTTPClient(nil)
+	defer client.CloseIdleConnections()
+	keys = newKeyState(client)
+	keys.base = srv.URL
+	g := newGuard(keys)
+	g.observeHost(pluginapi.HostConfigSummary{})
+	if e := rpcErr(t, g.admit(context.Background(), "auth-1", credentials{apiKey: exampleKey}, storage(""), nil, "a/b")); e.Code != "quota_unverified" {
+		t.Fatalf("%+v", e)
+	}
+}

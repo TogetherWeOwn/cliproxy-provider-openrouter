@@ -38,7 +38,7 @@ type keyEntry struct {
 	gen    uint64
 	flight *keyFlight
 	// latches hold upstream exhaustions (see latch.go), by scope.
-	latches [latchScopes]*latch
+	latches [effectKinds]*latch
 }
 
 type keyFlight struct {
@@ -80,10 +80,35 @@ func (k *keyState) entryLocked(authID string, c credentials) *keyEntry {
 func (k *keyState) get(ctx context.Context, authID string, c credentials, maxStale time.Duration) (keyReading, error) {
 	for attempt := 1; ; attempt++ {
 		r, superseded, err := k.getOnce(ctx, authID, c, maxStale)
-		if !superseded || attempt >= maxReadAttempts {
+		if !superseded {
 			return r, err
 		}
+		if attempt >= maxReadAttempts {
+			// Every read was overtaken by a newer limit error: fail closed.
+			return keyReading{}, quotaUnavailable()
+		}
 	}
+}
+
+// boundary is the first reset after the reading was taken: the next 00:00
+// UTC (every OpenRouter calendar window and the free-model day reset then),
+// or an earlier server-reported reset of the key limit or the effective
+// budget. A reading never outlives it: past a reset, its counts are wrong.
+func (r keyReading) boundary() time.Time {
+	b := nextUTCDay(r.FetchedAt)
+	for _, at := range []*time.Time{r.KeyResetsAt, r.effectiveResetsAt()} {
+		if at != nil && at.After(r.FetchedAt) && at.Before(b) {
+			b = *at
+		}
+	}
+	return b
+}
+
+func (r keyReading) effectiveResetsAt() *time.Time {
+	if r.Effective == nil {
+		return nil
+	}
+	return r.Effective.ResetsAt
 }
 
 // maxReadAttempts bounds re-reads after invalidations overtook a shared read.
@@ -92,7 +117,7 @@ const maxReadAttempts = 3
 func (k *keyState) getOnce(ctx context.Context, authID string, c credentials, maxStale time.Duration) (keyReading, bool, error) {
 	k.mu.Lock()
 	e := k.entryLocked(authID, c)
-	if e.good != nil && !e.stale && k.now().Sub(e.good.FetchedAt) < keyTTL {
+	if e.good != nil && !e.stale && k.now().Sub(e.good.FetchedAt) < keyTTL && k.now().Before(e.good.boundary()) {
 		r := *e.good
 		k.mu.Unlock()
 		return r, false, nil
@@ -130,7 +155,7 @@ func (k *keyState) getOnce(ctx context.Context, authID string, c credentials, ma
 		// error, so it must not admit.
 		return f.reading, k.entries[authID] == e && e.gen != f.gen, nil
 	}
-	if maxStale > 0 && e.good != nil && !e.stale && k.now().Sub(e.good.FetchedAt) <= maxStale {
+	if maxStale > 0 && e.good != nil && !e.stale && k.now().Sub(e.good.FetchedAt) <= maxStale && k.now().Before(e.good.boundary()) {
 		return *e.good, false, nil
 	}
 	return keyReading{}, false, f.err
