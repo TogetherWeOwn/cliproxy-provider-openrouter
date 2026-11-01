@@ -123,9 +123,27 @@ func credentialsFrom(storage []byte, metadata map[string]any) (credentials, erro
 type authProvider struct {
 	kit.APIKeyAuth
 	guard  *guard
+	oauth  *pkceLogin
 	mu     sync.Mutex
 	files  map[string][32]byte
 	owners map[[32]byte]owner
+}
+
+// StartLogin runs the real PKCE login (see pkce.go), shadowing the embedded
+// kit API-key login. API-key auths keep working through uploaded auth files.
+func (p *authProvider) StartLogin(ctx context.Context, req pluginapi.AuthLoginStartRequest) (pluginapi.AuthLoginStartResponse, error) {
+	if p == nil || p.oauth == nil {
+		return pluginapi.AuthLoginStartResponse{}, &pluginabi.Error{Code: "login_unavailable", Message: "OAuth login is not configured", HTTPStatus: 500}
+	}
+	return p.oauth.StartLogin(ctx, req)
+}
+
+// PollLogin completes the PKCE login, shadowing the embedded kit poller.
+func (p *authProvider) PollLogin(ctx context.Context, req pluginapi.AuthLoginPollRequest) (pluginapi.AuthLoginPollResponse, error) {
+	if p == nil || p.oauth == nil {
+		return pluginapi.AuthLoginPollResponse{}, &pluginabi.Error{Code: "login_unavailable", Message: "OAuth login is not configured", HTTPStatus: 500}
+	}
+	return p.oauth.PollLogin(ctx, req)
 }
 
 // owner is the auth file that holds a key: its name and, when the host

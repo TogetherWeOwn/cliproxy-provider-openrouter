@@ -89,12 +89,23 @@ func TestNormalizeQuotaInvariants(t *testing.T) {
 	}
 }
 
-func TestNoLimitBucketModes(t *testing.T) {
+func TestNoLimitOmitsKeyBucket(t *testing.T) {
 	r, _ := parseKey(fixture(t, "key_no_limit.json"), now0)
-	refused := normalizeQuota(r, credentials{apiKey: exampleKey}, now0).Groups[0].Buckets[0]
-	allowed := normalizeQuota(r, credentials{apiKey: exampleKey, allowUnlimited: true}, now0).Groups[0].Buckets[0]
-	if refused.RemainingFraction != 0 || !strings.Contains(refused.Window, "plugin refuses requests") || allowed.RemainingFraction != 0 || !strings.Contains(allowed.Window, "UNBOUNDED") {
-		t.Fatalf("%+v %+v", refused, allowed)
+	for _, c := range []credentials{{apiKey: exampleKey}, {apiKey: exampleKey, allowUnlimited: true}} {
+		out := normalizeQuota(r, c, now0)
+		for _, g := range out.Groups {
+			if g.DisplayName == "Key credit limit" {
+				t.Fatalf("limitless key shows a key bucket: %+v", out)
+			}
+			for _, b := range g.Buckets {
+				if strings.Contains(b.Window, "NOT SET") || strings.Contains(b.Window, "UNBOUNDED") {
+					t.Fatalf("limitless key shows an exhaustion-like bucket: %+v", b)
+				}
+			}
+		}
+		if out.Subscription == nil || out.Subscription.TierName != "NO KEY LIMIT" {
+			t.Fatalf("limitless key lost its tier: %+v", out.Subscription)
+		}
 	}
 }
 
