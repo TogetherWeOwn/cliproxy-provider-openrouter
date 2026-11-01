@@ -1,0 +1,1 @@
+{"error":{"code":403,"message":"Workspace budget exceeded. $500.00 of $500.00 used.","metadata":{"limit_source":"openrouter_workspace_budget","scope":"workspace","limit_usd":500,"spend_usd":500,"resets_at":null}}}

@@ -1,0 +1,16 @@
+# Keeps the SHA-pinned actions in .github/workflows current: a PR bumps the
+# SHA and its version comment together. Module bumps stay manual: the
+# CLIProxyAPI pin is the host version the hostcompat test proves.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      # Dependabot titles default to "Bump ...", which is not a Conventional
+      # Commits header; the squash commit takes the PR title.
+      prefix: ci

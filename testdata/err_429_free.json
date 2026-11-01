@@ -1,0 +1,1 @@
+{"error":{"code":429,"message":"Rate limit exceeded: free-models-per-day. Add 10 credits to unlock 1000 free model requests per day","metadata":{"error_type":"rate_limit_exceeded"}}}

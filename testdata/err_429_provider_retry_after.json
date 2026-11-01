@@ -1,0 +1,1 @@
+{"error":{"code":429,"message":"Provider returned error","metadata":{"error_type":"rate_limit_exceeded","provider_name":"Example","provider_code":"rate_limited"}}}

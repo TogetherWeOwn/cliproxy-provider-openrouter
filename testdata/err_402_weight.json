@@ -1,0 +1,1 @@
+{"error":{"code":402,"message":"This request is too large for your in-flight spending budget.","metadata":{"reason":"weight_exceeds_budget","limit_source":"openrouter_credits","remedy_hint":"Lower max_tokens."}}}
