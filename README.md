@@ -177,50 +177,38 @@ the guard; errors are never cached.
 
 ### Buckets
 
-| Group | Bucket | Remaining fraction | Reset |
-|---|---|---|---|
-| Key credit limit | `<daily\|weekly\|monthly\|lifetime\|unknown-reset> key limit` | `limit_remaining / limit`, clamped to 0-1 | `budgets[scope=key_limit].resets_at` when plausible, else the UTC calendar rule; none for lifetime/unknown |
-| Key credit limit | `Key limit: UNREADABLE (plugin refuses requests)` (`limit` present but not a number) | 0 | none |
-| Budgets | `<interval> <member guardrail\|key guardrail\|workspace\|unknown> budget`, one per `budgets[]` entry except `key_limit` (max 16) | `remaining_usd / limit_usd` (or `limit_usd - spend_usd`) | `resets_at`, else the calendar rule |
-| Free models (:free) | `daily free-model requests` (when the daily limit is above 0) | `remaining / limit` | next 00:00 UTC |
-| Account credits | `account credit balance (no reset; top-up)` (when `/credits` answers) | `(total_credits - total_usage) / total_credits` | none |
+One `OpenRouter` group holds short-labelled bars with no descriptions:
+
+| Bucket | Remaining fraction | Reset |
+|---|---|---|
+| `<Daily\|Weekly\|Monthly\|Lifetime> key limit` (or `Key limit` when the reset window is unknown) | `limit_remaining / limit`, clamped to 0-1 | `budgets[scope=key_limit].resets_at` when plausible, else the UTC calendar rule; none for lifetime/unknown |
+| `Key limit unreadable` (limit present but not a number; plugin refuses requests) | 0 | none |
+| `<Daily\|Weekly\|Monthly\|Lifetime> <member guardrail\|key guardrail\|workspace\|unknown> budget`, one per `budgets[]` entry except `key_limit` | `remaining_usd / limit_usd` (or `limit_usd - spend_usd`); uncomputable stays a 0% warning bar | `resets_at`, else the calendar rule |
+| `Free-model requests today` (when the daily free-model limit is above 0) | `remaining / limit` | next 00:00 UTC |
 
 A key without a limit shows no key-limit bucket at all: a 0-fraction bucket
-reads as exhausted. The card keeps the `NO KEY LIMIT` tier, the spend
-counters, and the account balance; whether requests are admitted is the spend
-guard's job (`allow_unlimited_key`), not the card's.
+reads as exhausted, so the no-limit hunk omits the bucket and the card keeps
+the `NO KEY LIMIT` tier. A zero key limit, a negative `limit_remaining`, and an
+unknown remaining all show a 0% warning bar. Whether requests are admitted is
+the spend guard's job (`allow_unlimited_key`), not the card's.
 
-For example, the live key (weekly $5 limit, nothing spent, read on Sunday
-2026-11-01) shows `weekly key limit` with fraction 1, reset
-`2026-11-02T00:00:00Z` and `$0.00 of $5.00 used; $5.00 left`; `daily free-model
-requests` `0/1000` with fraction 1 and reset `2026-11-02T00:00:00Z`; and an
-account balance of `$7.4627 of $245.00 purchased` (`245 - 237.537304708`). The
-live `budgets[]` holds one `scope: key_limit` entry with `resets_at`; it feeds
-the key-limit reset and is not repeated under Budgets.
-
-A zero key limit shows fraction 0 (`key limit is $0`). A negative
-`limit_remaining` shows as a negative amount with fraction 0. The budget that
-matches `effective_budget` is marked `binding`.
+Usage counters (key spend per window, BYOK splits, the spend reserve, the
+account-credits bar, lifetime purchased) stay off the card because they repeat
+the bars or are not usage limits.
 
 ### Summary metrics
 
-The spend windows are counters, not caps, so they are metrics in USD rather than
-buckets (a bucket needs a remaining fraction, which an uncapped window lacks).
-The cap that governs a window is a bucket above, with its reset.
+At most three chips, none repeating a bar:
 
 | Key | Source |
 |---|---|
-| `key_limit_usd`, `key_remaining_usd` | `limit`, `limit_remaining` |
-| `key_spend_day_usd`, `key_spend_week_usd`, `key_spend_month_usd`, `key_spend_total_usd` | `usage_daily`, `usage_weekly`, `usage_monthly`, `usage` (these counters lag real spend) |
-| `byok_spend_{day,week,month,total}_usd` | `byok_usage*`, only when `byok_usage` is above 0 |
-| `account_balance_usd` | `total_credits - total_usage` |
-| `spend_reserve_usd` | `min_remaining_usd`, when above 0 |
-| `free_requests_used` | `free_model_daily_requests.used` |
-| `key_expires_in_days` | `expires_at - now`, 1 decimal |
+| `account_balance_usd` (`Balance`) | `total_credits - total_usage`, format `currency` USD |
+| `lifetime_spent_usd` (`Lifetime spent`) | `total_usage`, format `currency` USD |
+| `key_expires_in_days` (`Key expires in`) | whole days from `expires_at - now`, minimum 1 while unexpired and 0 once elapsed, so an expired cached reading keeps its indicator instead of reading as no expiry |
 
-Money metrics use format `currency` and currency `USD`. A metric is emitted only
-when its source is a finite number; fields of the wrong JSON type read as absent.
-The subscription tier is `KEY LIMIT UNREADABLE`, `NO KEY LIMIT`, `free tier` or `paid credits`. A
+A metric is emitted only when its source is a finite number; fields of the
+wrong JSON type read as absent. The subscription tier is `KEY LIMIT UNREADABLE`,
+`NO KEY LIMIT`, `free tier` or `paid credits`. A
 management key used as `api_key` is reported as `invalid_credentials`.
 
 ### Reset rules

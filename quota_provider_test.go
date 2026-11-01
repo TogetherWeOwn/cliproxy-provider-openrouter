@@ -96,6 +96,38 @@ func TestNormalizeQuotaInvariants(t *testing.T) {
 	}
 }
 
+func TestExpiryChipBounds(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		expires time.Time
+		want    float64
+	}{
+		{"elapsed expiry stays visible at zero", now0.Add(-time.Hour), 0},
+		{"expiry later today reads as one day", now0.Add(6 * time.Hour), 1},
+		{"multi-day expiry rounds", now0.Add(72 * time.Hour), 3},
+	} {
+		got := expiryChip(tc.expires, now0)
+		if got.Key != "key_expires_in_days" || got.Label != "Key expires in" || got.Value != tc.want || got.Unit != "days" {
+			t.Errorf("%s: %+v", tc.name, got)
+		}
+	}
+	// An elapsed expiry still emits its chip, so an expired key never reads
+	// as a key with no expiry set.
+	r, _ := parseKey(fixture(t, "key_no_limit.json"), now0)
+	past := now0.Add(-time.Hour)
+	r.ExpiresAt = &past
+	out := normalizeQuota(r, credentials{apiKey: exampleKey}, now0)
+	found := false
+	for _, m := range out.Summary {
+		if m.Key == "key_expires_in_days" && m.Value == 0 {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("elapsed expiry dropped its chip: %+v", out)
+	}
+}
+
 func TestNoLimitOmitsKeyBucket(t *testing.T) {
 	r, _ := parseKey(fixture(t, "key_no_limit.json"), now0)
 	for _, c := range []credentials{{apiKey: exampleKey}, {apiKey: exampleKey, allowUnlimited: true}} {

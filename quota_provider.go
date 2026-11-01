@@ -122,9 +122,15 @@ func budgetBar(b budget, now time.Time) pluginapi.QuotaBucket {
 
 // expiryChip renders the key expiry as a plan-row chip. Panel chips are
 // label-plus-number only, so the chip shows days remaining ("Key expires in")
-// — an absolute date has no numeric value to render.
+// — an absolute date has no numeric value to render. A future expiry always
+// shows at least 1 day so a key expiring later today does not read as
+// expired; an elapsed expiry shows 0, keeping the indicator visible for
+// cached readings that cross their expiry.
 func expiryChip(expires time.Time, now time.Time) pluginapi.QuotaMetric {
 	days := math.Round(expires.Sub(now).Hours() / 24)
+	if expires.After(now) && days < 1 {
+		days = 1
+	}
 	if days < 0 {
 		days = 0
 	}
@@ -168,7 +174,7 @@ func normalizeQuota(r keyReading, _ credentials, now time.Time) pluginapi.QuotaF
 			pluginapi.QuotaMetric{Key: "lifetime_spent_usd", Label: "Lifetime spent", Value: r.Account.Usage, Format: "currency", Currency: "USD"},
 		)
 	}
-	if r.ExpiresAt != nil && r.ExpiresAt.After(now) {
+	if r.ExpiresAt != nil {
 		out.Summary = append(out.Summary, expiryChip(*r.ExpiresAt, now))
 	}
 	return out

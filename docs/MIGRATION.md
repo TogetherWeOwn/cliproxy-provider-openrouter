@@ -44,9 +44,11 @@ Create one auth file per key (mode `0600`) with the README schema. Do not set an
 1. Plugin registered with version 0.2.0 and quota support; the auth parses and
    persists; a second file with the same key is rejected.
 2. The model list contains only `openrouter/...` IDs and no `-1` router.
-3. The quota card shows the key limit with its reset (from
-   `budgets[scope=key_limit].resets_at`), the free-model requests, the spend
-   metrics and the account balance, all read with the regular key.
+3. The quota card shows one `OpenRouter` group with short-labelled bars (key
+   limit with its reset from `budgets[scope=key_limit].resets_at`,
+   `Free-model requests today`, non-key_limit budgets when present) and at
+   most three chips (`Balance`, `Lifetime spent`, `Key expires in` when the
+   key has an expiry), all read with the regular key.
 4. One small request to a cheap model succeeds, streaming and non-streaming.
    With a reasoning model and a tiny `max_tokens`, `null` content with
    `finish_reason: "length"` is a success.
