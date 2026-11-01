@@ -205,8 +205,9 @@ func modelInfo(m modelWire) pluginapi.ModelInfo {
 	if strings.TrimSpace(name) == "" {
 		name = m.ID
 	}
+	served := serveID(m.ID)
 	info := pluginapi.ModelInfo{
-		ID: modelPrefix + m.ID, Object: "model", OwnedBy: provider, Name: modelPrefix + m.ID, Created: m.Created,
+		ID: served, Object: "model", OwnedBy: provider, Name: served, Created: m.Created,
 		DisplayName: name + displayNameAffix, Description: truncateRunes(m.Description, maxDescription),
 		SupportedParameters: m.SupportedParameters,
 	}

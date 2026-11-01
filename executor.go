@@ -85,12 +85,9 @@ func (e executor) Execute(ctx context.Context, r pluginapi.ExecutorRequest) (plu
 
 func (e executor) ExecuteStream(ctx context.Context, r pluginapi.ExecutorRequest) (pluginapi.ExecutorStreamResponse, error) {
 	r.Stream = true
-	out, err := e.passthrough(r.AuthID, upstreamModel(r.Payload), &r.Stream).ExecuteStream(ctx, r)
-	if err != nil {
-		return out, err
-	}
-	out.Chunks = frameEvents(ctx, out.Chunks, clientWantsBareJSON(r))
-	return out, nil
+	// SSE re-framing lives in kit Passthrough.ExecuteStream; framing here
+	// again would double-frame ("data: data:") the chunks.
+	return e.passthrough(r.AuthID, upstreamModel(r.Payload), &r.Stream).ExecuteStream(ctx, r)
 }
 
 func (e executor) HttpRequest(ctx context.Context, r pluginapi.ExecutorHTTPRequest) (pluginapi.ExecutorHTTPResponse, error) {
@@ -138,14 +135,15 @@ func invalidModel() *pluginabi.Error {
 	return &pluginabi.Error{Code: "invalid_model", Message: "invalid_model: expected an openrouter/ model", HTTPStatus: http.StatusBadRequest}
 }
 
-// upstreamModel returns the requested model with the prefix stripped once,
+// upstreamModel returns the requested model mapped back to its upstream id,
 // for classification only; buildRequest validates it.
 func upstreamModel(payload []byte) string {
 	var body struct {
 		Model string `json:"model"`
 	}
 	_ = json.Unmarshal(payload, &body)
-	return strings.TrimPrefix(body.Model, modelPrefix)
+	upstream, _ := upstreamID(body.Model)
+	return upstream
 }
 
 func validUpstreamModel(id string) bool {
@@ -171,12 +169,12 @@ func buildRequest(payload, storage []byte, metadata map[string]any, stream *bool
 	if json.Unmarshal(payload, &body) != nil || body == nil {
 		return pluginapi.HTTPRequest{}, c, "", &pluginabi.Error{Code: "invalid_request", Message: "invalid_request: payload must be a JSON object", HTTPStatus: http.StatusBadRequest}
 	}
-	var model string
-	if json.Unmarshal(body["model"], &model) != nil || !strings.HasPrefix(model, modelPrefix) {
+	var served string
+	if json.Unmarshal(body["model"], &served) != nil {
 		return pluginapi.HTTPRequest{}, c, "", invalidModel()
 	}
-	model = strings.TrimPrefix(model, modelPrefix)
-	if !validUpstreamModel(model) {
+	model, ok := upstreamID(served)
+	if !ok || !validUpstreamModel(model) {
 		return pluginapi.HTTPRequest{}, c, "", invalidModel()
 	}
 	body["model"], _ = json.Marshal(model)

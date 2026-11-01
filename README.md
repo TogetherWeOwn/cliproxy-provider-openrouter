@@ -89,15 +89,16 @@ The plugin YAML has no settings. No CLIProxy configuration is required.
 Model discovery calls `GET /api/v1/models` per auth through the host HTTP client
 (no probes: probes cost money). **Namespace rule:** every model identifier the
 plugin publishes, both `id` and `name` (the host lists `name` as the Gemini
-model name), is `openrouter/` plus OpenRouter's ID, with no exception for `~`
-aliases, `:free` variants or OpenRouter's own `openrouter/...` routers. The
-prefix is stripped exactly once before dispatch:
+model name), carries `openrouter/` exactly once, with no exception for `~`
+aliases, `:free` variants or OpenRouter's own `openrouter/...` routers (those
+already carry it, so they pass through instead of doubling). Dispatch inverts
+the mapping:
 
 | Client model ID | Sent to OpenRouter |
 |---|---|
 | `openrouter/anthropic/claude-sonnet-4.5` | `anthropic/claude-sonnet-4.5` |
 | `openrouter/meta-llama/llama-3.3-70b-instruct:free` | `meta-llama/llama-3.3-70b-instruct:free` |
-| `openrouter/openrouter/free` | `openrouter/free` |
+| `openrouter/free` | `openrouter/free` |
 | `openrouter/~anthropic/claude-sonnet-latest` | `~anthropic/claude-sonnet-latest` |
 
 With an auth `prefix` such as `acct`, the host also publishes

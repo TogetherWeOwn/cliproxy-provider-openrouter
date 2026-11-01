@@ -39,7 +39,7 @@ func TestModelsForAuthFiltersAndPrefixes(t *testing.T) {
 	want := []string{
 		"openrouter/anthropic/claude-sonnet-4.5",
 		"openrouter/meta-llama/llama-3.3-70b-instruct:free",
-		"openrouter/openrouter/free",
+		"openrouter/free",
 		"openrouter/~anthropic/claude-sonnet-latest",
 		"openrouter/mistralai/sunset-model",
 		"openrouter/Qwen/Qwen3-Coder-Next",

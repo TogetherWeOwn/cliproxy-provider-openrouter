@@ -43,7 +43,7 @@ const (
 	provider = "openrouter"
 	version  = "0.1.0"
 	modelA   = "openrouter/anthropic/claude-sonnet-4.5"
-	modelB   = "openrouter/openrouter/free"
+	modelB   = "openrouter/free"
 )
 
 // applyModelPrefixes is the host's own auth-prefix expansion
@@ -175,7 +175,7 @@ func (u *upstream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		model, _ := body["model"].(string)
-		if strings.HasPrefix(model, "openrouter/anthropic") || model == "openrouter/openrouter/free" {
+		if strings.HasPrefix(model, "openrouter/anthropic") || model == "free" || model == "openrouter/openrouter/free" {
 			u.t.Errorf("prefix not stripped exactly once: %q", model)
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -341,7 +341,7 @@ func TestRealHostLoader(t *testing.T) {
 			t.Fatalf("unprefixed discovery ID %q", model.ID)
 		}
 	}
-	if !found.Handled || strings.Join(ids, ",") != "openrouter/anthropic/claude-sonnet-4.5,openrouter/openrouter/free,openrouter/~anthropic/claude-sonnet-latest" {
+	if !found.Handled || strings.Join(ids, ",") != "openrouter/anthropic/claude-sonnet-4.5,openrouter/free,openrouter/~anthropic/claude-sonnet-latest" {
 		t.Fatalf("discovery %v", ids)
 	}
 	// (9) Re-discovery is host-driven: a second call within 10 minutes is

@@ -32,8 +32,9 @@ func makePlugin(host kit.Caller) (*kit.Runtime, error) {
 	keys.onInvalidate = quota.Invalidate
 	models := newCatalog(g)
 	return kit.New(kit.Definition{
-		Metadata:  pluginapi.Metadata{Name: provider, Version: version, Author: "TogetherWeOwn", GitHubRepository: "https://github.com/TogetherWeOwn/cliproxy-provider-openrouter"},
-		Configure: configureBase,
+		Metadata:       pluginapi.Metadata{Name: provider, Version: version, Author: "TogetherWeOwn", GitHubRepository: "https://github.com/TogetherWeOwn/cliproxy-provider-openrouter"},
+		ModelNamespace: provider,
+		Configure:      configureBase,
 		Capabilities: pluginapi.Capabilities{
 			AuthProvider: newAuthProvider(g), ModelRegistrar: models, ModelProvider: models, Executor: newExecutor(g, keys),
 			ExecutorModelScope:   pluginapi.ExecutorModelScopeBoth,
