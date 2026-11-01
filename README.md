@@ -3,7 +3,7 @@
 A [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) provider plugin for
 [OpenRouter](https://openrouter.ai). It is built on
 [cliproxy-provider-kit](https://github.com/TogetherWeOwn/cliproxy-provider-kit)
-(pinned at `21069bf`), targets CLIProxyAPI **v8.0.49** (plugin RPC schema 10),
+(pinned at `88850ce`), targets CLIProxyAPI **v8.0.49** (plugin RPC schema 10),
 and is tested against the real v8.0.49 plugin loader. It adds no scheduler, no
 background poller and no host configuration.
 
