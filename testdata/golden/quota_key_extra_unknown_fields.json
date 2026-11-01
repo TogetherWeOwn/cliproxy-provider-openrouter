@@ -3,59 +3,14 @@
     "plan": "OpenRouter",
     "tierName": "paid credits"
   },
-  "summary": [
-    {
-      "key": "key_limit_usd",
-      "label": "Key limit",
-      "value": 8,
-      "format": "currency",
-      "currency": "USD"
-    },
-    {
-      "key": "key_remaining_usd",
-      "label": "Key limit remaining",
-      "value": 6,
-      "format": "currency",
-      "currency": "USD"
-    },
-    {
-      "key": "key_spend_day_usd",
-      "label": "Key spend today (UTC)",
-      "value": 1,
-      "format": "currency",
-      "currency": "USD"
-    },
-    {
-      "key": "key_spend_week_usd",
-      "label": "Key spend this week (Mon-Sun UTC)",
-      "value": 2,
-      "format": "currency",
-      "currency": "USD"
-    },
-    {
-      "key": "key_spend_month_usd",
-      "label": "Key spend this month (UTC)",
-      "value": 2,
-      "format": "currency",
-      "currency": "USD"
-    },
-    {
-      "key": "key_spend_total_usd",
-      "label": "Key spend all time",
-      "value": 2,
-      "format": "currency",
-      "currency": "USD"
-    }
-  ],
   "groups": [
     {
-      "displayName": "Key credit limit",
+      "displayName": "Limits",
       "buckets": [
         {
-          "window": "weekly key limit",
+          "window": "Weekly key limit · $6.00 of $8.00 left",
           "remainingFraction": 0.75,
-          "resetTime": "2026-11-09T00:00:00Z",
-          "description": "$2.00 of $8.00 used; $6.00 left"
+          "resetTime": "2026-11-09T00:00:00Z"
         }
       ]
     }

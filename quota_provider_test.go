@@ -52,20 +52,18 @@ func TestNormalizeQuotaGolden(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		golden(t, "quota_"+file, normalizeQuota(r, credentials{apiKey: exampleKey}, now0))
+		golden(t, "quota_"+file, normalizeQuota(r, now0))
 	}
-	r, _ := parseKey(fixture(t, "key_no_limit.json"), now0)
-	golden(t, "quota_key_no_limit_allowed.json", normalizeQuota(r, credentials{apiKey: exampleKey, allowUnlimited: true, reserve: 2}, now0))
-	r, _ = parseKey(fixture(t, "key_monthly_limit.json"), now0)
+	r, _ := parseKey(fixture(t, "key_monthly_limit.json"), now0)
 	a, _ := parseCredits(fixture(t, "credits_ok.json"))
 	r.Account = a
-	golden(t, "quota_key_monthly_with_credits.json", normalizeQuota(r, credentials{apiKey: exampleKey}, now0))
+	golden(t, "quota_key_monthly_with_credits.json", normalizeQuota(r, now0))
 }
 
 func TestNormalizeQuotaInvariants(t *testing.T) {
 	for _, file := range keyFixtures {
 		r, _ := parseKey(fixture(t, file), now0)
-		out := normalizeQuota(r, credentials{apiKey: exampleKey}, now0)
+		out := normalizeQuota(r, now0)
 		for _, g := range out.Groups {
 			for _, b := range g.Buckets {
 				if b.RemainingFraction < 0 || b.RemainingFraction > 1 {
@@ -91,21 +89,16 @@ func TestNormalizeQuotaInvariants(t *testing.T) {
 
 func TestNoLimitOmitsKeyBucket(t *testing.T) {
 	r, _ := parseKey(fixture(t, "key_no_limit.json"), now0)
-	for _, c := range []credentials{{apiKey: exampleKey}, {apiKey: exampleKey, allowUnlimited: true}} {
-		out := normalizeQuota(r, c, now0)
-		for _, g := range out.Groups {
-			if g.DisplayName == "Key credit limit" {
-				t.Fatalf("limitless key shows a key bucket: %+v", out)
-			}
-			for _, b := range g.Buckets {
-				if strings.Contains(b.Window, "NOT SET") || strings.Contains(b.Window, "UNBOUNDED") {
-					t.Fatalf("limitless key shows an exhaustion-like bucket: %+v", b)
-				}
+	out := normalizeQuota(r, now0)
+	for _, g := range out.Groups {
+		for _, b := range g.Buckets {
+			if strings.Contains(b.Window, "key limit") || strings.Contains(b.Window, "NOT SET") || strings.Contains(b.Window, "UNBOUNDED") {
+				t.Fatalf("limitless key shows an exhaustion-like bucket: %+v", b)
 			}
 		}
-		if out.Subscription == nil || out.Subscription.TierName != "NO KEY LIMIT" {
-			t.Fatalf("limitless key lost its tier: %+v", out.Subscription)
-		}
+	}
+	if out.Subscription == nil || out.Subscription.TierName != "NO KEY LIMIT" {
+		t.Fatalf("limitless key lost its tier: %+v", out.Subscription)
 	}
 }
 
@@ -116,9 +109,13 @@ func quotaRequest(extra string) pluginapi.QuotaFetchRequest {
 func TestQuotaProviderFetch(t *testing.T) {
 	h := newHarness(t, fixture(t, "key_monthly_limit.json"))
 	out, err := h.quota.FetchQuota(context.Background(), quotaRequest(""))
-	// The harness serves no /credits body, so the balance is omitted.
-	if err != nil || len(out.Groups) != 2 || out.Groups[0].Buckets[0].RemainingFraction != 0.42 || h.srv.creditCalls.Load() != 1 {
+	// The harness serves no /credits body, so the balance chips are omitted:
+	// one Limits group with the key-limit and free-model bars.
+	if err != nil || len(out.Groups) != 1 || len(out.Summary) != 0 || out.Groups[0].Buckets[0].RemainingFraction != 0.42 || h.srv.creditCalls.Load() != 1 {
 		t.Fatalf("%+v %v", out, err)
+	}
+	if v := kit.CheckCard(out); len(v) != 0 {
+		t.Fatalf("card style violations: %v", v)
 	}
 	desc, _ := h.quota.DescribeQuota(context.Background(), pluginapi.QuotaDescribeRequest{})
 	if desc.DisplayName != "OpenRouter" || desc.SupportsReset || len(desc.SupportedProviders) != 1 || desc.SupportedProviders[0] != provider {
@@ -126,35 +123,50 @@ func TestQuotaProviderFetch(t *testing.T) {
 	}
 }
 
-// GET /credits uses the regular key. Any failure omits only the account
-// group; the key limit and everything else still work.
+// GET /credits uses the regular key. Success adds the two balance chips
+// (Balance and Lifetime spent); any failure omits them. The key limit and
+// everything else still work either way. There is never an account group:
+// the balance is a shared pool with no reset, so it is a chip, not a bar.
 func TestQuotaProviderCredits(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		body   []byte
-		status int
-		groups int
+		name        string
+		body        []byte
+		status      int
+		wantBalance bool
 	}{
-		{"success adds the account group", fixture(t, "credits_ok.json"), 200, 3},
-		{"live regular-key response adds the account group", fixture(t, "live_credits_inference.json"), 200, 3},
-		{"401 omits only the account group", fixture(t, "key_401.json"), 401, 2},
-		{"403 omits only the account group", fixture(t, "credits_403.json"), 403, 2},
-		{"500 omits only the account group", []byte(`{"error":{"code":500}}`), 500, 2},
-		{"invalid body omits only the account group", []byte(`{"data":{"total_credits":"x"}}`), 200, 2},
-		{"zero credits", fixture(t, "credits_zero.json"), 200, 3},
+		{"success adds the balance chips", fixture(t, "credits_ok.json"), 200, true},
+		{"live regular-key response adds the balance chips", fixture(t, "live_credits_inference.json"), 200, true},
+		{"401 omits only the balance chips", fixture(t, "key_401.json"), 401, false},
+		{"403 omits only the balance chips", fixture(t, "credits_403.json"), 403, false},
+		{"500 omits only the balance chips", []byte(`{"error":{"code":500}}`), 500, false},
+		{"invalid body omits only the balance chips", []byte(`{"data":{"total_credits":"x"}}`), 200, false},
+		{"zero credits", fixture(t, "credits_zero.json"), 200, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newHarness(t, fixture(t, "key_monthly_limit.json"))
 			h.srv.credits, h.srv.creditsCode = tc.body, tc.status
 			out, err := h.quota.FetchQuota(context.Background(), quotaRequest(""))
-			if err != nil || len(out.Groups) != tc.groups || h.srv.creditCalls.Load() != 1 || out.Groups[0].DisplayName != "Key credit limit" {
+			if err != nil || len(out.Groups) != 1 || h.srv.creditCalls.Load() != 1 || out.Groups[0].DisplayName != "Limits" {
 				t.Fatalf("%+v %v", out, err)
 			}
-			if tc.groups == 3 {
-				b := out.Groups[2].Buckets[0]
-				if out.Groups[2].DisplayName != "Account credits" || b.ResetTime != "" || b.RemainingFraction < 0 || b.RemainingFraction > 1 {
-					t.Fatalf("%+v", out.Groups[2])
+			chips := map[string]pluginapi.QuotaMetric{}
+			for _, m := range out.Summary {
+				chips[m.Key] = m
+			}
+			balance, hasBalance := chips["account_balance_usd"]
+			spent, hasSpent := chips["lifetime_spent_usd"]
+			if hasBalance != tc.wantBalance || hasSpent != tc.wantBalance {
+				t.Fatalf("balance chips present=%v/%v, want %v: %+v", hasBalance, hasSpent, tc.wantBalance, out.Summary)
+			}
+			if tc.wantBalance {
+				for _, m := range []pluginapi.QuotaMetric{balance, spent} {
+					if m.Format != "currency" || m.Currency != "USD" {
+						t.Fatalf("chip not currency USD: %+v", m)
+					}
 				}
+			}
+			if v := kit.CheckCard(out); len(v) != 0 {
+				t.Fatalf("card style violations: %v", v)
 			}
 			for _, seen := range h.srv.seen() {
 				if seen != "/credits Bearer "+exampleKey && seen != "/key Bearer "+exampleKey {
@@ -239,7 +251,7 @@ func TestQuotaProviderCacheSingleFlightAndErrors(t *testing.T) {
 	// Errors are never cached.
 	h.srv.set(fixture(t, "key_weekly_limit.json"), 200)
 	out, err := h.quota.FetchQuota(context.Background(), quotaRequest(""))
-	if err != nil || h.srv.keyCalls.Load() != 3 || out.Groups[0].Buckets[0].Window != "weekly key limit" {
+	if err != nil || h.srv.keyCalls.Load() != 3 || !strings.HasPrefix(out.Groups[0].Buckets[0].Window, "Weekly key limit") {
 		t.Fatalf("%+v %v calls=%d", out, err, h.srv.keyCalls.Load())
 	}
 }

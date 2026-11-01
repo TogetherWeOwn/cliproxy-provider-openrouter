@@ -57,9 +57,10 @@ func TestLiveQuotaCard(t *testing.T) {
 	}
 	balance := liveBalance()
 	wantGroups := []pluginapi.QuotaGroup{
-		{DisplayName: "Key credit limit", Buckets: []pluginapi.QuotaBucket{{Window: "weekly key limit", RemainingFraction: 1, ResetTime: "2026-11-02T00:00:00Z", Description: "$0.00 of $5.00 used; $5.00 left"}}},
-		{DisplayName: "Free models (:free)", Buckets: []pluginapi.QuotaBucket{{Window: "daily free-model requests", RemainingFraction: 1, ResetTime: "2026-11-02T00:00:00Z", Description: "0/1000 requests today (account-wide; 20/min not reported)"}}},
-		{DisplayName: "Account credits", Buckets: []pluginapi.QuotaBucket{{Window: "account credit balance (no reset; top-up)", RemainingFraction: balance / 245, Description: "$7.4627 of $245.00 purchased"}}},
+		{DisplayName: "Limits", Buckets: []pluginapi.QuotaBucket{
+			{Window: "Weekly key limit · $5.00 of $5.00 left", RemainingFraction: 1, ResetTime: "2026-11-02T00:00:00Z"},
+			{Window: "Free-model requests today · 1000 of 1000 left", RemainingFraction: 1, ResetTime: "2026-11-02T00:00:00Z"},
+		}},
 	}
 	if !reflect.DeepEqual(out.Groups, wantGroups) {
 		t.Fatalf("groups\n got %+v\nwant %+v", out.Groups, wantGroups)
@@ -68,7 +69,7 @@ func TestLiveQuotaCard(t *testing.T) {
 	for _, m := range out.Summary {
 		metrics[m.Key] = m.Value
 	}
-	wantMetrics := map[string]float64{"key_limit_usd": 5, "key_remaining_usd": 5, "key_spend_day_usd": 0, "key_spend_week_usd": 0, "key_spend_month_usd": 0, "key_spend_total_usd": 0, "account_balance_usd": balance, "free_requests_used": 0}
+	wantMetrics := map[string]float64{"account_balance_usd": balance, "lifetime_spent_usd": liveUsage}
 	if !reflect.DeepEqual(metrics, wantMetrics) {
 		t.Fatalf("metrics %v", metrics)
 	}
@@ -85,7 +86,7 @@ func TestLiveQuotaCard(t *testing.T) {
 	}
 	r, _ := parseKey(fixture(t, "live_key_inference.json"), liveNow)
 	r.Account, _ = parseCredits(fixture(t, "live_credits_inference.json"))
-	golden(t, "quota_live_key_inference.json", normalizeQuota(r, credentials{apiKey: exampleKey}, liveNow))
+	golden(t, "quota_live_key_inference.json", normalizeQuota(r, liveNow))
 }
 
 func TestLiveGuard(t *testing.T) {

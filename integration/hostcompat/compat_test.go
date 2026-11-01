@@ -316,7 +316,7 @@ func TestRealHostLoader(t *testing.T) {
 		t.Fatalf("persisted auth no longer parses: %v", err)
 	}
 	quota, handled, err := host.FetchQuota(ctx, pluginapi.QuotaFetchRequest{AuthID: auth.ID, Provider: provider, StorageJSON: saved})
-	if err != nil || !handled || len(quota.Groups) != 3 || quota.Groups[0].Buckets[0].RemainingFraction != .42 || quota.Groups[0].Buckets[0].ResetTime == "" || quota.Groups[2].DisplayName != "Account credits" {
+	if err != nil || !handled || len(quota.Groups) != 1 || quota.Groups[0].DisplayName != "Limits" || quota.Groups[0].Buckets[0].RemainingFraction != .42 || quota.Groups[0].Buckets[0].ResetTime == "" {
 		t.Fatalf("quota %+v %v %v", quota, handled, err)
 	}
 

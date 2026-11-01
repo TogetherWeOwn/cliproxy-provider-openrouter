@@ -3,77 +3,19 @@
     "plan": "OpenRouter",
     "tierName": "paid credits"
   },
-  "summary": [
-    {
-      "key": "key_limit_usd",
-      "label": "Key limit",
-      "value": 25,
-      "format": "currency",
-      "currency": "USD"
-    },
-    {
-      "key": "key_remaining_usd",
-      "label": "Key limit remaining",
-      "value": 10.5,
-      "format": "currency",
-      "currency": "USD"
-    },
-    {
-      "key": "key_spend_day_usd",
-      "label": "Key spend today (UTC)",
-      "value": 1.5,
-      "format": "currency",
-      "currency": "USD"
-    },
-    {
-      "key": "key_spend_week_usd",
-      "label": "Key spend this week (Mon-Sun UTC)",
-      "value": 4,
-      "format": "currency",
-      "currency": "USD"
-    },
-    {
-      "key": "key_spend_month_usd",
-      "label": "Key spend this month (UTC)",
-      "value": 14.5,
-      "format": "currency",
-      "currency": "USD"
-    },
-    {
-      "key": "key_spend_total_usd",
-      "label": "Key spend all time",
-      "value": 40.25,
-      "format": "currency",
-      "currency": "USD"
-    },
-    {
-      "key": "free_requests_used",
-      "label": "Free-model requests today",
-      "value": 3,
-      "unit": "requests",
-      "format": "number"
-    }
-  ],
   "groups": [
     {
-      "displayName": "Key credit limit",
+      "displayName": "Limits",
       "buckets": [
         {
-          "window": "monthly key limit",
+          "window": "Monthly key limit · $10.50 of $25.00 left",
           "remainingFraction": 0.42,
-          "resetTime": "2026-12-01T00:00:00Z",
-          "description": "$14.50 of $25.00 used; $10.50 left"
-        }
-      ]
-    },
-    {
-      "displayName": "Free models (:free)",
-      "buckets": [
+          "resetTime": "2026-12-01T00:00:00Z"
+        },
         {
-          "window": "daily free-model requests",
+          "window": "Free-model requests today · 997 of 1000 left",
           "remainingFraction": 0.997,
-          "resetTime": "2026-11-05T00:00:00Z",
-          "description": "3/1000 requests today (account-wide; 20/min not reported)"
+          "resetTime": "2026-11-05T00:00:00Z"
         }
       ]
     }

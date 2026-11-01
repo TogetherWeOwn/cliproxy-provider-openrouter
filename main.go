@@ -41,10 +41,13 @@ func makePlugin(host kit.Caller) (*kit.Runtime, error) {
 		Metadata:       pluginapi.Metadata{Name: provider, Version: version, Author: "TogetherWeOwn", GitHubRepository: "https://github.com/TogetherWeOwn/cliproxy-provider-openrouter"},
 		ModelNamespace: provider,
 		Configure:      configureBase,
+		// The PKCE login keeps no management routes: the panel's standard
+		// OAuth dialog drives the approval and the host OAuth callback
+		// stores the code, so there is nothing to register.
 		Capabilities: pluginapi.Capabilities{
 			AuthProvider: auth, ModelRegistrar: models, ModelProvider: models, Executor: newExecutor(g, keys),
 			ExecutorModelScope:   pluginapi.ExecutorModelScopeBoth,
-			ExecutorInputFormats: []string{"openai"}, ExecutorOutputFormats: []string{"openai"}, QuotaProvider: quota, ManagementAPI: oauth,
+			ExecutorInputFormats: []string{"openai"}, ExecutorOutputFormats: []string{"openai"}, QuotaProvider: quota,
 		},
 		OnShutdown: func(context.Context) error { client.CloseIdleConnections(); return nil },
 	}, host)
