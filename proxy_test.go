@@ -45,7 +45,7 @@ func TestQuotaPollUsesAuthOrHostProxy(t *testing.T) {
 		{AuthID: "b", StorageJSON: []byte(`{"api_key":"two"}`), Host: host},
 	} {
 		out, err := q.FetchQuota(context.Background(), r)
-		if err != nil || len(out.Groups) != 3 {
+		if err != nil || len(out.Groups) != 1 || out.Groups[0].DisplayName != "OpenRouter" {
 			t.Fatalf("%s: %+v %v", r.AuthID, out, err)
 		}
 	}

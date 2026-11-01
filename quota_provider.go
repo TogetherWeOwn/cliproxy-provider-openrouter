@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"math"
-	"strconv"
 	"strings"
 	"time"
 
@@ -39,23 +38,6 @@ func newQuotaProvider(keys *keyState, g *guard) *quotaProvider {
 	})}
 }
 
-// usd formats dollars with at least 2 and at most 4 decimals, sign first:
-// 25 -> $25.00, 9.996 -> $9.996, -0.02 -> -$0.02.
-func usd(v float64) string {
-	sign := ""
-	if v < 0 {
-		sign, v = "-", -v
-	}
-	s := strings.TrimRight(strconv.FormatFloat(v, 'f', 4, 64), "0")
-	if i := strings.IndexByte(s, '.'); len(s)-i-1 < 2 {
-		s += strings.Repeat("0", 2-(len(s)-i-1))
-	}
-	if s == "0.00" {
-		sign = ""
-	}
-	return sign + "$" + s
-}
-
 func fraction(remaining, limit float64) float64 {
 	if !(limit > 0) {
 		return 0
@@ -72,70 +54,95 @@ func resetText(server *time.Time, w window, now time.Time) string {
 
 var scopeLabels = map[string]string{"member": "member guardrail", "workspace_default_member": "member guardrail", "api_key": "key guardrail", "workspace_default_key": "key guardrail", "workspace": "workspace"}
 
-func keyGroup(r keyReading, c credentials, now time.Time) []pluginapi.QuotaBucket {
-	if r.LimitMalformed {
-		return []pluginapi.QuotaBucket{{Window: "Key limit: UNREADABLE (plugin refuses requests)", RemainingFraction: 0, Description: "OpenRouter reported a key limit that is not a number."}}
-	}
-	if r.Limit == nil {
-		// A key without a limit has no remaining fraction to show: a
-		// zero-fraction bucket reads as exhausted. Omit the bucket; the
-		// card keeps the NO KEY LIMIT tier, the spend counters, and the
-		// account balance. Whether requests are admitted is the guard's
-		// job (allow_unlimited_key), not the card's.
-		return nil
-	}
-	b := pluginapi.QuotaBucket{Window: r.Reset.String() + " key limit", ResetTime: resetText(r.KeyResetsAt, r.Reset, now)}
-	switch {
-	case *r.Limit == 0:
-		b.Description = "key limit is $0"
-	case *r.Limit < 0:
-		b.Description = "invalid key limit"
-	case r.Remaining == nil:
-		return nil
+// keyLimitWindow is the short row label for the key-limit bar.
+func keyLimitWindow(w window) string {
+	switch w {
+	case windowDaily:
+		return "Daily key limit"
+	case windowWeekly:
+		return "Weekly key limit"
+	case windowMonthly:
+		return "Monthly key limit"
+	case windowLifetime:
+		return "Lifetime key limit"
 	default:
-		b.RemainingFraction = fraction(*r.Remaining, *r.Limit)
-		b.Description = usd(*r.Limit-*r.Remaining) + " of " + usd(*r.Limit) + " used; " + usd(*r.Remaining) + " left"
-		if r.IncludeBYOK {
-			b.Description += "; includes BYOK"
-		}
+		return "Key limit"
 	}
-	return []pluginapi.QuotaBucket{b}
 }
 
-func budgetBucket(b budget, effective *budget, now time.Time) pluginapi.QuotaBucket {
+// keyBar renders the key-limit bar: a 0% warning bar when the limit is
+// malformed, zero, negative, or its remaining is unknown; nil when the key
+// has no limit (a zero-fraction bucket would read as exhausted, so the
+// no-limit hunk omits the bucket and the card keeps the NO KEY LIMIT tier).
+// Whether requests are admitted is the guard's job, not the card's.
+func keyBar(r keyReading, now time.Time) *pluginapi.QuotaBucket {
+	if r.LimitMalformed {
+		return &pluginapi.QuotaBucket{Window: "Key limit unreadable"}
+	}
+	if r.Limit == nil {
+		return nil
+	}
+	b := &pluginapi.QuotaBucket{Window: keyLimitWindow(r.Reset), ResetTime: resetText(r.KeyResetsAt, r.Reset, now)}
+	if *r.Limit <= 0 || r.Remaining == nil {
+		return b
+	}
+	b.RemainingFraction = fraction(*r.Remaining, *r.Limit)
+	return b
+}
+
+// budgetWindow is the short row label for a non-key_limit budget bar.
+func budgetWindow(b budget) string {
 	label, ok := scopeLabels[b.Scope]
-	if !ok {
+	if !ok || label == "" {
 		label = "unknown"
 	}
-	out := pluginapi.QuotaBucket{Window: b.Interval.String() + " " + label + " budget", ResetTime: resetText(b.ResetsAt, b.Interval, now)}
-	rem := b.remaining()
-	if b.Limit == nil || *b.Limit <= 0 || rem == nil {
-		out.Description = "invalid budget"
-		return out
+	var interval string
+	switch b.Interval {
+	case windowDaily:
+		interval = "Daily"
+	case windowWeekly:
+		interval = "Weekly"
+	case windowMonthly:
+		interval = "Monthly"
+	case windowLifetime:
+		interval = "Lifetime"
 	}
-	out.RemainingFraction = fraction(*rem, *b.Limit)
-	spend := *b.Limit - *rem
-	if b.Spend != nil {
-		spend = *b.Spend
-	}
-	out.Description = usd(spend) + " of " + usd(*b.Limit)
-	if b.same(effective) {
-		out.Description += "; binding"
+	return strings.TrimSpace(interval + " " + label + " budget")
+}
+
+// budgetBar renders one non-key_limit budget bar; an invalid budget (no
+// positive limit or no computable remaining) stays a 0% warning bar.
+func budgetBar(b budget, now time.Time) pluginapi.QuotaBucket {
+	out := pluginapi.QuotaBucket{Window: budgetWindow(b), ResetTime: resetText(b.ResetsAt, b.Interval, now)}
+	if rem := b.remaining(); b.Limit != nil && *b.Limit > 0 && rem != nil {
+		out.RemainingFraction = fraction(*rem, *b.Limit)
 	}
 	return out
 }
 
-func money(key, label string, v *float64) []pluginapi.QuotaMetric {
-	if v == nil {
-		return nil
+// expiryChip renders the key expiry as a plan-row chip. Panel chips are
+// label-plus-number only, so both tiers show days remaining: "Key expires
+// in" under 30 days, "Expires" beyond that. An absolute date has no numeric
+// value to render, so the far tier stays relative too.
+func expiryChip(expires time.Time, now time.Time) pluginapi.QuotaMetric {
+	days := math.Round(expires.Sub(now).Hours() / 24)
+	if days < 0 {
+		days = 0
 	}
-	return []pluginapi.QuotaMetric{{Key: key, Label: label, Value: *v, Format: "currency", Currency: "USD"}}
+	label := "Expires"
+	if days < 30 {
+		label = "Key expires in"
+	}
+	return pluginapi.QuotaMetric{Key: "key_expires_in_days", Label: label, Value: days, Unit: "days", Format: "number"}
 }
 
-// normalizeQuota builds the card: key limit, budgets, free-model requests
-// and account credits as buckets; spend counters as summary metrics. Usage
-// windows are counters, not caps, so they have no remaining fraction.
-func normalizeQuota(r keyReading, c credentials, now time.Time) pluginapi.QuotaFetchResponse {
+// normalizeQuota builds the single-group card: the key-limit bar, the
+// free-model daily bar, and one bar per non-key_limit budget when present.
+// Summary chips are the account balance and lifetime spend (USD currency,
+// formatted panel-side with 2 decimals) plus the expiry chip when the key
+// has an expiry. Usage counters, BYOK splits, the spend reserve, and
+// purchased-credit totals stay off the card.
+func normalizeQuota(r keyReading, _ credentials, now time.Time) pluginapi.QuotaFetchResponse {
 	out := pluginapi.QuotaFetchResponse{Subscription: &pluginapi.QuotaSubscription{Plan: "OpenRouter", TierName: "paid credits"}}
 	switch {
 	case r.LimitMalformed:
@@ -145,54 +152,29 @@ func normalizeQuota(r keyReading, c credentials, now time.Time) pluginapi.QuotaF
 	case r.FreeTier:
 		out.Subscription.TierName = "free tier"
 	}
-	if buckets := keyGroup(r, c, now); len(buckets) > 0 {
-		out.Groups = append(out.Groups, pluginapi.QuotaGroup{DisplayName: "Key credit limit", Buckets: buckets})
-	}
-	if len(r.Budgets) > 0 {
-		g := pluginapi.QuotaGroup{DisplayName: "Budgets"}
-		for _, b := range r.Budgets {
-			g.Buckets = append(g.Buckets, budgetBucket(b, r.Effective, now))
-		}
-		out.Groups = append(out.Groups, g)
+	var bars []pluginapi.QuotaBucket
+	if b := keyBar(r, now); b != nil {
+		bars = append(bars, *b)
 	}
 	if r.Free != nil && r.Free.Limit > 0 {
-		out.Groups = append(out.Groups, pluginapi.QuotaGroup{DisplayName: "Free models (:free)", Buckets: []pluginapi.QuotaBucket{{
-			Window: "daily free-model requests", RemainingFraction: fraction(float64(r.Free.Remaining), float64(r.Free.Limit)), ResetTime: nextUTCDay(now).Format(time.RFC3339),
-			Description: strconv.FormatInt(r.Free.Used, 10) + "/" + strconv.FormatInt(r.Free.Limit, 10) + " requests today (account-wide; 20/min not reported)",
-		}}})
+		bars = append(bars, pluginapi.QuotaBucket{
+			Window: "Free-model requests today", RemainingFraction: fraction(float64(r.Free.Remaining), float64(r.Free.Limit)), ResetTime: nextUTCDay(now).Format(time.RFC3339),
+		})
+	}
+	for _, b := range r.Budgets {
+		bars = append(bars, budgetBar(b, now))
+	}
+	if len(bars) > 0 {
+		out.Groups = append(out.Groups, pluginapi.QuotaGroup{DisplayName: "OpenRouter", Buckets: bars})
 	}
 	if r.Account != nil {
-		out.Groups = append(out.Groups, pluginapi.QuotaGroup{DisplayName: "Account credits", Buckets: []pluginapi.QuotaBucket{{
-			Window: "account credit balance (no reset; top-up)", RemainingFraction: fraction(r.Account.balance(), r.Account.Credits),
-			Description: usd(r.Account.balance()) + " of " + usd(r.Account.Credits) + " purchased",
-		}}})
+		out.Summary = append(out.Summary,
+			pluginapi.QuotaMetric{Key: "account_balance_usd", Label: "Balance", Value: r.Account.balance(), Format: "currency", Currency: "USD"},
+			pluginapi.QuotaMetric{Key: "lifetime_spent_usd", Label: "Lifetime spent", Value: r.Account.Usage, Format: "currency", Currency: "USD"},
+		)
 	}
-	m := &out.Summary
-	*m = append(*m, money("key_limit_usd", "Key limit", r.Limit)...)
-	*m = append(*m, money("key_remaining_usd", "Key limit remaining", r.Remaining)...)
-	periods := [4][2]string{{"total", "all time"}, {"day", "today (UTC)"}, {"week", "this week (Mon-Sun UTC)"}, {"month", "this month (UTC)"}}
-	for _, i := range []int{usageDaily, usageWeekly, usageMonthly, usageTotal} {
-		*m = append(*m, money("key_spend_"+periods[i][0]+"_usd", "Key spend "+periods[i][1], r.Usage[i])...)
-	}
-	if r.BYOK[usageTotal] != nil && *r.BYOK[usageTotal] > 0 {
-		for _, i := range []int{usageDaily, usageWeekly, usageMonthly, usageTotal} {
-			*m = append(*m, money("byok_spend_"+periods[i][0]+"_usd", "BYOK spend "+periods[i][1], r.BYOK[i])...)
-		}
-	}
-	if r.Account != nil {
-		balance := r.Account.balance()
-		*m = append(*m, money("account_balance_usd", "Account credit balance", &balance)...)
-	}
-	if c.reserve > 0 {
-		reserve := c.reserve
-		*m = append(*m, money("spend_reserve_usd", "Plugin spend reserve", &reserve)...)
-	}
-	if r.Free != nil {
-		*m = append(*m, pluginapi.QuotaMetric{Key: "free_requests_used", Label: "Free-model requests today", Value: float64(r.Free.Used), Unit: "requests", Format: "number"})
-	}
-	if r.ExpiresAt != nil {
-		days := math.Round(r.ExpiresAt.Sub(now).Hours()/24*10) / 10
-		*m = append(*m, pluginapi.QuotaMetric{Key: "key_expires_in_days", Label: "Key expires in (days)", Value: days, Unit: "days", Format: "number"})
+	if r.ExpiresAt != nil && r.ExpiresAt.After(now) {
+		out.Summary = append(out.Summary, expiryChip(*r.ExpiresAt, now))
 	}
 	return out
 }

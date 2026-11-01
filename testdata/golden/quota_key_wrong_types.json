@@ -5,12 +5,11 @@
   },
   "groups": [
     {
-      "displayName": "Key credit limit",
+      "displayName": "OpenRouter",
       "buckets": [
         {
-          "window": "Key limit: UNREADABLE (plugin refuses requests)",
-          "remainingFraction": 0,
-          "description": "OpenRouter reported a key limit that is not a number."
+          "window": "Key limit unreadable",
+          "remainingFraction": 0
         }
       ]
     }

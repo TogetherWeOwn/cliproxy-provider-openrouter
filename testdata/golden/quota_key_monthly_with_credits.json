@@ -5,92 +5,33 @@
   },
   "summary": [
     {
-      "key": "key_limit_usd",
-      "label": "Key limit",
-      "value": 25,
-      "format": "currency",
-      "currency": "USD"
-    },
-    {
-      "key": "key_remaining_usd",
-      "label": "Key limit remaining",
-      "value": 10.5,
-      "format": "currency",
-      "currency": "USD"
-    },
-    {
-      "key": "key_spend_day_usd",
-      "label": "Key spend today (UTC)",
-      "value": 1.5,
-      "format": "currency",
-      "currency": "USD"
-    },
-    {
-      "key": "key_spend_week_usd",
-      "label": "Key spend this week (Mon-Sun UTC)",
-      "value": 4,
-      "format": "currency",
-      "currency": "USD"
-    },
-    {
-      "key": "key_spend_month_usd",
-      "label": "Key spend this month (UTC)",
-      "value": 14.5,
-      "format": "currency",
-      "currency": "USD"
-    },
-    {
-      "key": "key_spend_total_usd",
-      "label": "Key spend all time",
-      "value": 40.25,
-      "format": "currency",
-      "currency": "USD"
-    },
-    {
       "key": "account_balance_usd",
-      "label": "Account credit balance",
+      "label": "Balance",
       "value": 74.75,
       "format": "currency",
       "currency": "USD"
     },
     {
-      "key": "free_requests_used",
-      "label": "Free-model requests today",
-      "value": 3,
-      "unit": "requests",
-      "format": "number"
+      "key": "lifetime_spent_usd",
+      "label": "Lifetime spent",
+      "value": 25.75,
+      "format": "currency",
+      "currency": "USD"
     }
   ],
   "groups": [
     {
-      "displayName": "Key credit limit",
+      "displayName": "OpenRouter",
       "buckets": [
         {
-          "window": "monthly key limit",
+          "window": "Monthly key limit",
           "remainingFraction": 0.42,
-          "resetTime": "2026-12-01T00:00:00Z",
-          "description": "$14.50 of $25.00 used; $10.50 left"
-        }
-      ]
-    },
-    {
-      "displayName": "Free models (:free)",
-      "buckets": [
+          "resetTime": "2026-12-01T00:00:00Z"
+        },
         {
-          "window": "daily free-model requests",
+          "window": "Free-model requests today",
           "remainingFraction": 0.997,
-          "resetTime": "2026-11-05T00:00:00Z",
-          "description": "3/1000 requests today (account-wide; 20/min not reported)"
-        }
-      ]
-    },
-    {
-      "displayName": "Account credits",
-      "buckets": [
-        {
-          "window": "account credit balance (no reset; top-up)",
-          "remainingFraction": 0.7437810945273632,
-          "description": "$74.75 of $100.50 purchased"
+          "resetTime": "2026-11-05T00:00:00Z"
         }
       ]
     }
