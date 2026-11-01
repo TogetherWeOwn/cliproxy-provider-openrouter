@@ -121,19 +121,14 @@ func budgetBar(b budget, now time.Time) pluginapi.QuotaBucket {
 }
 
 // expiryChip renders the key expiry as a plan-row chip. Panel chips are
-// label-plus-number only, so both tiers show days remaining: "Key expires
-// in" under 30 days, "Expires" beyond that. An absolute date has no numeric
-// value to render, so the far tier stays relative too.
+// label-plus-number only, so the chip shows days remaining ("Key expires in")
+// — an absolute date has no numeric value to render.
 func expiryChip(expires time.Time, now time.Time) pluginapi.QuotaMetric {
 	days := math.Round(expires.Sub(now).Hours() / 24)
 	if days < 0 {
 		days = 0
 	}
-	label := "Expires"
-	if days < 30 {
-		label = "Key expires in"
-	}
-	return pluginapi.QuotaMetric{Key: "key_expires_in_days", Label: label, Value: days, Unit: "days", Format: "number"}
+	return pluginapi.QuotaMetric{Key: "key_expires_in_days", Label: "Key expires in", Value: days, Unit: "days", Format: "number"}
 }
 
 // normalizeQuota builds the single-group card: the key-limit bar, the
