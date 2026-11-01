@@ -3,7 +3,7 @@
 A [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) provider plugin for
 [OpenRouter](https://openrouter.ai). It is built on
 [cliproxy-provider-kit](https://github.com/TogetherWeOwn/cliproxy-provider-kit)
-(pinned at `21069bf`), targets CLIProxyAPI **v8.0.49** (plugin RPC schema 10),
+(pinned at `88850ce`), targets CLIProxyAPI **v8.0.49** (plugin RPC schema 10),
 and is tested against the real v8.0.49 plugin loader. It adds no scheduler, no
 background poller and no host configuration.
 
@@ -87,17 +87,19 @@ The plugin YAML has no settings. No CLIProxy configuration is required.
 ## Models and execution
 
 Model discovery calls `GET /api/v1/models` per auth through the host HTTP client
-(no probes: probes cost money). **Namespace rule:** every model identifier the
+(no probes: probes cost money). Fixed model namespace `openrouter/`; auth
+`prefix` does not replace it. Every model identifier the
 plugin publishes, both `id` and `name` (the host lists `name` as the Gemini
-model name), is `openrouter/` plus OpenRouter's ID, with no exception for `~`
-aliases, `:free` variants or OpenRouter's own `openrouter/...` routers. The
-prefix is stripped exactly once before dispatch:
+model name), carries `openrouter/` exactly once, with no exception for `~`
+aliases, `:free` variants or OpenRouter's own `openrouter/...` routers (those
+already carry it, so they pass through instead of doubling). Dispatch inverts
+the mapping:
 
 | Client model ID | Sent to OpenRouter |
 |---|---|
 | `openrouter/anthropic/claude-sonnet-4.5` | `anthropic/claude-sonnet-4.5` |
 | `openrouter/meta-llama/llama-3.3-70b-instruct:free` | `meta-llama/llama-3.3-70b-instruct:free` |
-| `openrouter/openrouter/free` | `openrouter/free` |
+| `openrouter/free` | `openrouter/free` |
 | `openrouter/~anthropic/claude-sonnet-latest` | `~anthropic/claude-sonnet-latest` |
 
 With an auth `prefix` such as `acct`, the host also publishes

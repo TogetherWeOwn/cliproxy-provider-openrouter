@@ -25,7 +25,7 @@ func jsonEqual(t *testing.T, got []byte, want string) {
 }
 
 func TestBuildRequestStripsPrefixOnceAndKeepsFields(t *testing.T) {
-	for in, want := range map[string]string{"openrouter/anthropic/claude-sonnet-4.5": "anthropic/claude-sonnet-4.5", "openrouter/openrouter/auto": "openrouter/auto", "openrouter/openrouter/free": "openrouter/free", "openrouter/~anthropic/claude-sonnet-latest": "~anthropic/claude-sonnet-latest", "openrouter/meta-llama/llama-3.3-70b-instruct:free": "meta-llama/llama-3.3-70b-instruct:free"} {
+	for in, want := range map[string]string{"openrouter/anthropic/claude-sonnet-4.5": "anthropic/claude-sonnet-4.5", "openrouter/auto": "openrouter/auto", "openrouter/free": "openrouter/free", "openrouter/~anthropic/claude-sonnet-latest": "~anthropic/claude-sonnet-latest", "openrouter/meta-llama/llama-3.3-70b-instruct:free": "meta-llama/llama-3.3-70b-instruct:free"} {
 		payload := `{"model":"` + in + `","messages":[{"role":"user","content":"<hi> & bye"}],"provider":{"order":["a","b"],"allow_fallbacks":false},"models":["x/y"],"reasoning":{"effort":"high"},"plugins":[{"id":"web"}],"session_id":"s-1","temperature":0.2,"stream":true}`
 		req, _, upstream, err := buildRequest([]byte(payload), storage(""), nil, ptr(false))
 		if err != nil || upstream != want {
@@ -36,7 +36,9 @@ func TestBuildRequestStripsPrefixOnceAndKeepsFields(t *testing.T) {
 }
 
 func TestBuildRequestRejectsInvalidModels(t *testing.T) {
-	for _, payload := range []string{`{"model":"anthropic/claude"}`, `{"model":"openrouter/"}`, `{"model":"openrouter/x"}`, `{"model":"openrouter/a b/c"}`, `{"model":7}`, `{}`} {
+	// Single-segment ids (openrouter/x) are structurally first-party ids and
+	// pass through for the upstream to accept or 404; doubled ids never do.
+	for _, payload := range []string{`{"model":"anthropic/claude"}`, `{"model":"openrouter/"}`, `{"model":"openrouter/a b/c"}`, `{"model":"openrouter/openrouter/auto"}`, `{"model":7}`, `{}`} {
 		_, _, _, err := buildRequest([]byte(payload), storage(""), nil, nil)
 		if e := rpcErr(t, err); e.Code != "invalid_model" || e.HTTPStatus != 400 {
 			t.Fatalf("%s: %+v", payload, e)
@@ -77,7 +79,7 @@ func TestExecuteStreamRequestShapeAndUnbufferedRelay(t *testing.T) {
 	// holds the rest back until the first event has reached the caller.
 	chunks := [][]byte{bytes.Join(parts[:3], nil), bytes.Join(parts[3:], nil)}
 	host := &fakeHost{chunks: chunks, gate: make(chan struct{}), headers: http.Header{"Content-Type": {"text/event-stream"}}}
-	req := execRequest(host, `{"model":"openrouter/openrouter/free","messages":[]}`)
+	req := execRequest(host, `{"model":"openrouter/free","messages":[]}`)
 	req.Metadata = map[string]any{"request_path": "/v1/chat/completions"}
 	stream, err := h.exec.ExecuteStream(context.Background(), req)
 	if err != nil {
