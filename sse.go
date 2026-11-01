@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -29,7 +31,9 @@ const maxEventBytes = 8 << 20
 //
 // Comment lines (": OPENROUTER PROCESSING") and [DONE] are dropped: the host
 // and the handlers append their own terminator (adapters_executors.go:828-848).
-// Errors pass through; a frame cut short by an error is not delivered.
+// Errors pass through; a frame cut short by an error is not delivered. An
+// event over 8 MiB, or a multi-line event that is not one JSON value, ends the
+// stream with an invalid_stream error.
 func frameEvents(ctx context.Context, in <-chan pluginapi.ExecutorStreamChunk, bare bool) <-chan pluginapi.ExecutorStreamChunk {
 	out := make(chan pluginapi.ExecutorStreamChunk)
 	go func() {
@@ -37,30 +41,39 @@ func frameEvents(ctx context.Context, in <-chan pluginapi.ExecutorStreamChunk, b
 		var line []byte   // the current, incomplete line
 		var data []string // data lines of the current event
 		size := 0         // bytes held in data
-		send := func(c pluginapi.ExecutorStreamChunk) bool {
+		send := func(c pluginapi.ExecutorStreamChunk) error {
 			select {
 			case out <- c:
-				return true
+				return nil
 			case <-ctx.Done():
-				return false
+				return errConsumerGone
 			}
 		}
-		dispatch := func() bool {
+		dispatch := func() error {
 			if len(data) == 0 {
-				return true
+				return nil
 			}
 			payload := strings.Join(data, "\n")
 			data, size = data[:0], 0
 			if strings.TrimSpace(payload) == "[DONE]" {
-				return true
+				return nil
+			}
+			// One chunk is one line downstream: an event split over several
+			// data lines must be a single JSON value, sent compacted.
+			if strings.Contains(payload, "\n") {
+				var b bytes.Buffer
+				if json.Compact(&b, []byte(payload)) != nil {
+					return invalidStream("invalid_stream: multi-line upstream event is not JSON")
+				}
+				payload = b.String()
 			}
 			if !bare {
 				payload = "data: " + payload
 			}
 			return send(pluginapi.ExecutorStreamChunk{Payload: []byte(payload)})
 		}
-		// field handles one complete line (SSE: CRLF, LF or CR terminated).
-		field := func(l []byte) bool {
+		// field handles one complete line (SSE: CRLF or LF terminated).
+		field := func(l []byte) error {
 			l = bytes.TrimSuffix(l, []byte("\r"))
 			switch {
 			case len(l) == 0:
@@ -72,48 +85,65 @@ func frameEvents(ctx context.Context, in <-chan pluginapi.ExecutorStreamChunk, b
 				if len(v) > 0 && v[0] == ' ' {
 					v = v[1:]
 				}
+				if size+len(v) > maxEventBytes {
+					return errEventTooLarge
+				}
 				data = append(data, string(v))
 				size += len(v)
 			}
 			// Other fields (event, id, retry) carry nothing the host reads.
-			return true
+			return nil
 		}
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case c, ok := <-in:
-				if !ok {
-					if len(line) > 0 && !field(line) {
-						return
+		// run consumes the input; it returns nil at the end of the stream.
+		run := func() error {
+			for {
+				select {
+				case <-ctx.Done():
+					return errConsumerGone
+				case c, ok := <-in:
+					if !ok {
+						if len(line) > 0 {
+							if err := field(line); err != nil {
+								return err
+							}
+						}
+						return dispatch()
 					}
-					dispatch()
-					return
-				}
-				buf := append(line, c.Payload...)
-				for {
-					i := bytes.IndexByte(buf, '\n')
-					if i < 0 {
-						break
+					buf := append(line, c.Payload...)
+					for {
+						i := bytes.IndexByte(buf, '\n')
+						if i < 0 {
+							break
+						}
+						if err := field(buf[:i]); err != nil {
+							return err
+						}
+						buf = buf[i+1:]
 					}
-					if !field(buf[:i]) {
-						return
+					line = append(line[:0:0], buf...)
+					if len(line)+size > maxEventBytes {
+						return errEventTooLarge
 					}
-					buf = buf[i+1:]
-				}
-				line = append(line[:0:0], buf...)
-				if len(line)+size > maxEventBytes {
-					send(pluginapi.ExecutorStreamChunk{Err: &pluginabi.Error{Code: "invalid_stream", Message: "invalid_stream: upstream event exceeds 8 MiB", HTTPStatus: http.StatusBadGateway}})
-					return
-				}
-				if c.Err != nil {
-					send(pluginapi.ExecutorStreamChunk{Err: c.Err})
-					return
+					if c.Err != nil {
+						return c.Err
+					}
 				}
 			}
 		}
+		if err := run(); err != nil && err != errConsumerGone {
+			_ = send(pluginapi.ExecutorStreamChunk{Err: err})
+		}
 	}()
 	return out
+}
+
+var (
+	errConsumerGone  = errors.New("stream consumer gone")
+	errEventTooLarge = invalidStream("invalid_stream: upstream event exceeds 8 MiB")
+)
+
+func invalidStream(msg string) *pluginabi.Error {
+	return &pluginabi.Error{Code: "invalid_stream", Message: msg, HTTPStatus: http.StatusBadGateway}
 }
 
 // clientWantsBareJSON reports a client on an OpenAI chat or completions

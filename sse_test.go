@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"reflect"
@@ -58,7 +59,7 @@ func TestFrameEventsBareForOpenAIChat(t *testing.T) {
 		chunks = append(chunks, bytesChunk(s))
 	}
 	got, errs := collect(t, frameEvents(context.Background(), feed(chunks...), true))
-	want := []string{`{"a":1}`, `{"b":2}`, "{\"c\":\n3}", `{"d":4}`, `{"e":5}`}
+	want := []string{`{"a":1}`, `{"b":2}`, `{"c":3}`, `{"d":4}`, `{"e":5}`}
 	if len(errs) != 0 || !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %q errs %v", got, errs)
 	}
@@ -70,7 +71,7 @@ func TestFrameEventsDataFramedForTranslatedRoutes(t *testing.T) {
 		chunks = append(chunks, bytesChunk(s))
 	}
 	got, _ := collect(t, frameEvents(context.Background(), feed(chunks...), false))
-	want := []string{`data: {"a":1}`, `data: {"b":2}`, "data: {\"c\":\n3}", `data: {"d":4}`, `data: {"e":5}`}
+	want := []string{`data: {"a":1}`, `data: {"b":2}`, `data: {"c":3}`, `data: {"d":4}`, `data: {"e":5}`}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %q", got)
 	}
@@ -127,5 +128,22 @@ func TestFrameEventsBoundsAnEvent(t *testing.T) {
 	got, errs := collect(t, frameEvents(context.Background(), feed(bytesChunk("data: {\"a\":1}\n\ndata: "), pluginapi.ExecutorStreamChunk{Payload: big}), true))
 	if !reflect.DeepEqual(got, []string{`{"a":1}`}) || len(errs) != 1 || rpcErr(t, errs[0]).Code != "invalid_stream" {
 		t.Fatalf("got %d events, errs %v", len(got), errs)
+	}
+}
+
+// An oversized event completed inside one read is refused, not dispatched.
+func TestFrameEventsBoundsACompletedEvent(t *testing.T) {
+	big := bytes.Repeat([]byte("x"), maxEventBytes)
+	payload := append(append([]byte("data: {\"a\":1}\n\ndata: "), big...), []byte("\ndata: y\n\n")...)
+	got, errs := collect(t, frameEvents(context.Background(), feed(pluginapi.ExecutorStreamChunk{Payload: payload}), true))
+	if !reflect.DeepEqual(got, []string{`{"a":1}`}) || len(errs) != 1 || rpcErr(t, errs[0]).Code != "invalid_stream" {
+		t.Fatalf("got %d events, errs %v", len(got), errs)
+	}
+}
+
+func TestFrameEventsRefusesMultiLineNonJSON(t *testing.T) {
+	got, errs := collect(t, frameEvents(context.Background(), feed(bytesChunk("data: {\"a\":1}\n\ndata: not\ndata: json\n\ndata: {\"b\":2}\n\n")), false))
+	if !reflect.DeepEqual(got, []string{`data: {"a":1}`}) || len(errs) != 1 || rpcErr(t, errs[0]).Code != "invalid_stream" {
+		t.Fatalf("got %q errs %v", got, errs)
 	}
 }
