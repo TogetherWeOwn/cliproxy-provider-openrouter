@@ -87,17 +87,23 @@ The plugin YAML has no settings. No CLIProxy configuration is required.
 ## Management-UI login
 
 The management UI's **Start OpenRouter Login** card runs a real PKCE OAuth
-login: it shows the OpenRouter approval URL, the operator signs in and
-approves in a browser, then pastes the loopback callback URL from their
-address bar into the kit-style shell block on the plugin's OAuth page. The
-callback URL travels in an authenticated management POST body (never in a URL,
-log or process argument); the plugin extracts the one-time code into a
-`0600` `.oauth-openrouter-<state>.oauth` file, and the next poll exchanges it
-for an API key (`POST /api/v1/auth/keys`, code + verifier, S256), deletes the
-file, and runs the same ParseAuth validation and duplicate-key guard as an
-uploaded auth file, so logging in twice with the same key is idempotent. On a
-remote host, serve the management UI over `https://` so the pasted callback
-URL is encrypted in transit.
+login: it opens the plugin's OAuth page, which links the OpenRouter approval
+URL and shows a kit-style shell block. A browser that can reach the host
+completes through the host's own OAuth callback on its own (the callback URL
+is tagged with the login state, which the host requires); otherwise the
+operator signs in and approves, then pastes the loopback callback URL from
+their address bar into the shell block. The callback URL travels in an
+authenticated management POST body (never in a URL, log or process argument);
+the plugin extracts the one-time code into a `0600`
+`.oauth-openrouter-<state>.oauth` file (published atomically), and the next
+poll exchanges it for an API key (`POST /api/v1/auth/keys`, code + verifier,
+S256) — exactly one poller runs the exchange — deletes the file, and runs the
+same ParseAuth validation and duplicate-key guard as an uploaded auth file, so
+logging in twice with the same key is idempotent. Expired sessions, evicted
+sessions, and dead polls take their code files with them, and a new login
+sweeps leftovers older than the session lifetime. On a remote host, serve the
+management UI over `https://` so the pasted callback URL is encrypted in
+transit.
 
 ## Models and execution
 

@@ -27,23 +27,25 @@ import (
 // with an AuthProvider. The flow, with no host change:
 //
 //  1. StartLogin mints a PKCE verifier/challenge pair plus a random state and
-//     returns the OpenRouter approval URL. The operator opens it in a
-//     browser, signs in, and approves; OpenRouter redirects to the
-//     host-loopback callback URL with ?code=...
-//  2. The host runs headless, so a remote operator's browser cannot reach
-//     that loopback address. The kit-served OAuth page instead shows a
-//     copy-paste shell block: the operator pastes the callback URL from
-//     their address bar into their terminal, and it travels over stdin in
-//     an authenticated management POST. The secrets (management key in the
-//     header file, callback URL in the body) never land in shell history,
-//     process arguments, URLs, or logs.
-//  3. The submit handler extracts the one-time code and stores it in
-//     .oauth-openrouter-<state>.oauth in the auth directory.
+//     returns the plugin's OAuth page URL, kit-style. The page links the
+//     OpenRouter approval URL (callback tagged with the state, so the
+//     host's own OAuth callback accepts the redirect) and shows a
+//     copy-paste shell block for remote operators.
+//  2. A browser that can reach the host completes through the host callback
+//     on its own: the host writes the code file itself. Otherwise the
+//     operator pastes the loopback callback URL from their address bar into
+//     their terminal, and it travels over stdin in an authenticated
+//     management POST. The secrets (management key in the header file,
+//     callback URL in the body) never land in shell history, process
+//     arguments, URLs, or logs.
+//  3. The submit handler extracts the one-time code and publishes it
+//     atomically to .oauth-openrouter-<state>.oauth in the auth directory.
 //  4. PollLogin reads that file, exchanges the code for an API key with
 //     POST /api/v1/auth/keys (code + verifier, S256), deletes the file,
 //     and runs the provider's full ParseAuth pipeline, including the
 //     duplicate-key guard, so the login faces the same checks as an
-//     uploaded auth file.
+//     uploaded auth file. Exactly one poller runs the exchange; a
+//     concurrent second poller stays pending.
 //
 // The verifier never leaves the plugin process except in the exchange POST
 // body; the code is single-use and the file is removed once read.
@@ -68,10 +70,13 @@ type pkceHTTPDoer interface {
 }
 
 type pkceSession struct {
-	verifier  string
-	callback  string
-	authDir   string
-	expiresAt time.Time
+	verifier    string
+	callback    string
+	approvalURL string
+	pageURL     string
+	authDir     string
+	claimed     bool
+	expiresAt   time.Time
 }
 
 // pkceLogin serves one provider's OAuth login flow. It implements the
@@ -121,6 +126,7 @@ func (l *pkceLogin) evictLocked(now time.Time) {
 	for state, s := range l.sessions {
 		if !now.Before(s.expiresAt) {
 			delete(l.sessions, state)
+			removeOAuthFile(s.authDir, state)
 		}
 	}
 	for len(l.sessions) >= maxPKCESessions {
@@ -133,23 +139,29 @@ func (l *pkceLogin) evictLocked(now time.Time) {
 		if oldest == "" {
 			return
 		}
+		removeOAuthFile(l.sessions[oldest].authDir, oldest)
 		delete(l.sessions, oldest)
 	}
 }
 
-// StartLogin mints a pending OAuth session and returns the approval URL. The
-// callback is the host's own base URL: a browser on the host machine
-// completes the redirect directly, while a remote operator pastes the
-// callback URL into the OAuth page's shell block instead.
+// StartLogin mints a pending OAuth session and returns the plugin's OAuth
+// page URL, kit-style: the page links the OpenRouter approval URL and carries
+// the paste-box shell block. The callback URL sent to OpenRouter is the
+// host's own base URL tagged with the minted state, so a browser that can
+// reach the host completes through the host's OAuth callback (which requires
+// state and writes the code file itself); a remote operator pastes the
+// callback URL into the page's shell block instead. Either way the code lands
+// in the same single-use file PollLogin reads.
 func (l *pkceLogin) StartLogin(_ context.Context, req pluginapi.AuthLoginStartRequest) (pluginapi.AuthLoginStartResponse, error) {
 	if l == nil {
 		return pluginapi.AuthLoginStartResponse{}, &pluginabi.Error{Code: "api_key_only", Message: "API-key only: create an auth JSON file", HTTPStatus: 400}
 	}
-	callback := strings.TrimSpace(req.BaseURL)
-	u, err := url.Parse(callback)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+	u, err := url.Parse(strings.TrimSpace(req.BaseURL))
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" ||
+		strings.ContainsAny(u.Host, " \t\r\n'\"") {
 		return pluginapi.AuthLoginStartResponse{}, &pluginabi.Error{Code: "login_unavailable", Message: "host login base URL is missing", HTTPStatus: 500}
 	}
+	origin := u.Scheme + "://" + u.Host
 	verifier, err := pkceVerifier()
 	if err != nil {
 		return pluginapi.AuthLoginStartResponse{}, &pluginabi.Error{Code: "login_unavailable", Message: "cannot mint login state", HTTPStatus: 500}
@@ -158,16 +170,30 @@ func (l *pkceLogin) StartLogin(_ context.Context, req pluginapi.AuthLoginStartRe
 	if err != nil {
 		return pluginapi.AuthLoginStartResponse{}, &pluginabi.Error{Code: "login_unavailable", Message: "cannot mint login state", HTTPStatus: 500}
 	}
+	l.mu.Lock()
+	resourceBase := l.resourceBase
+	l.mu.Unlock()
+	if strings.TrimSpace(resourceBase) == "" {
+		return pluginapi.AuthLoginStartResponse{}, &pluginabi.Error{Code: "login_unavailable", Message: "login routes are not registered", HTTPStatus: 500}
+	}
+	q := u.Query()
+	q.Set("state", state)
+	u.RawQuery = q.Encode()
+	callback := u.String()
 	authURL := oauthAuthorizeURL + "?callback_url=" + url.QueryEscape(callback) +
 		"&code_challenge=" + url.QueryEscape(pkceChallenge(verifier)) +
 		"&code_challenge_method=S256"
+	pageURL := origin + resourceBase + "/" + pkcePageRoute + "?state=" + url.QueryEscape(state)
+	authDir := strings.TrimSpace(req.Host.AuthDir)
+	sweepStaleOAuthFiles(authDir, time.Now())
 	now := time.Now()
 	l.mu.Lock()
 	l.evictLocked(now)
 	l.sessions[state] = &pkceSession{verifier: verifier, callback: callback,
-		authDir: strings.TrimSpace(req.Host.AuthDir), expiresAt: now.Add(pkceSessionTTL)}
+		approvalURL: authURL, pageURL: pageURL,
+		authDir: authDir, expiresAt: now.Add(pkceSessionTTL)}
 	l.mu.Unlock()
-	return pluginapi.AuthLoginStartResponse{Provider: provider, URL: authURL, State: state, ExpiresAt: now.Add(pkceSessionTTL)}, nil
+	return pluginapi.AuthLoginStartResponse{Provider: provider, URL: pageURL, State: state, ExpiresAt: now.Add(pkceSessionTTL)}, nil
 }
 
 func (l *pkceLogin) lookup(state string) *pkceSession {
@@ -176,10 +202,33 @@ func (l *pkceLogin) lookup(state string) *pkceSession {
 	defer l.mu.Unlock()
 	s, ok := l.sessions[state]
 	if !ok || !now.Before(s.expiresAt) {
+		if ok {
+			removeOAuthFile(s.authDir, state)
+		}
 		delete(l.sessions, state)
 		return nil
 	}
 	return s
+}
+
+// validOAuthState gates file use: states are hex minted by StartLogin and
+// echoed back by the host, but a state carrying a separator or ".." must
+// never reach the filesystem.
+func validOAuthState(state string) bool {
+	if state == "" || len(state) > 128 {
+		return false
+	}
+	if strings.Contains(state, "/") || strings.Contains(state, "\\") || strings.Contains(state, "..") {
+		return false
+	}
+	for i := 0; i < len(state); i++ {
+		c := state[i]
+		if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_' || c == '.' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // oauthFile is the pending code file for a session. The name carries the
@@ -192,6 +241,40 @@ func oauthFile(authDir, state string) string {
 	return filepath.Join(authDir, name)
 }
 
+// removeOAuthFile deletes a session's pending code file, if any. It refuses
+// unsafe states and ignores errors: the file is single-use hygiene, and a
+// leftover is swept on the next StartLogin.
+func removeOAuthFile(authDir, state string) {
+	if !validOAuthState(state) {
+		return
+	}
+	_ = os.Remove(oauthFile(authDir, state))
+}
+
+// sweepStaleOAuthFiles removes code files left by sessions that died with the
+// process (or otherwise outlived their TTL), so abandoned logins cannot
+// accumulate files the session map no longer knows.
+func sweepStaleOAuthFiles(authDir string, now time.Time) {
+	if strings.TrimSpace(authDir) == "" {
+		return
+	}
+	entries, err := os.ReadDir(authDir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasPrefix(name, pkceFilePrefix) || !strings.HasSuffix(name, pkceFileSuffix) {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil || now.Sub(info.ModTime()) < pkceSessionTTL {
+			continue
+		}
+		_ = os.Remove(filepath.Join(authDir, name))
+	}
+}
+
 // PollLogin exchanges a submitted code for an API key exactly once. Until the
 // code arrives it reports pending with the approval URL; after a completed or
 // expired session it reports an error telling the operator to start over.
@@ -201,13 +284,31 @@ func (l *pkceLogin) PollLogin(ctx context.Context, req pluginapi.AuthLoginPollRe
 	}
 	s := l.lookup(req.State)
 	if s == nil {
+		// The session is gone (expired, consumed, or never existed). Drop
+		// any orphan code file so abandoned logins leave nothing behind.
+		removeOAuthFile(strings.TrimSpace(req.Host.AuthDir), req.State)
 		return pluginapi.AuthLoginPollResponse{Status: pluginapi.AuthLoginStatusError, Message: "login session expired or not found; start a new login"}, nil
 	}
+	// The submit handler publishes the file atomically, so a present file is
+	// always complete: pending polls before the approval must not claim the
+	// session.
 	raw, err := os.ReadFile(oauthFile(s.authDir, req.State))
 	if err != nil {
 		return pluginapi.AuthLoginPollResponse{Status: pluginapi.AuthLoginStatusPending,
-			Message: "waiting for approval: open the login URL in a browser, approve, then paste the callback URL into the OAuth page"}, nil
+			Message: "waiting for approval: open " + s.pageURL + " in a browser, approve, then paste the callback URL there"}, nil
 	}
+	l.mu.Lock()
+	current, ok := l.sessions[req.State]
+	if !ok || current != s {
+		l.mu.Unlock()
+		return pluginapi.AuthLoginPollResponse{Status: pluginapi.AuthLoginStatusError, Message: "login session expired or not found; start a new login"}, nil
+	}
+	if current.claimed {
+		l.mu.Unlock()
+		return pluginapi.AuthLoginPollResponse{Status: pluginapi.AuthLoginStatusPending, Message: "login was already collected by another poll; finishing"}, nil
+	}
+	current.claimed = true
+	l.mu.Unlock()
 	// The code is single-use: remove the file before exchanging so a retry
 	// or a second poller cannot replay it.
 	_ = os.Remove(oauthFile(s.authDir, req.State))
@@ -219,6 +320,11 @@ func (l *pkceLogin) PollLogin(ctx context.Context, req pluginapi.AuthLoginPollRe
 	}
 	key, err := l.exchange(ctx, req.HTTPClient, strings.TrimSpace(stored.Code), s.verifier)
 	if err != nil {
+		l.mu.Lock()
+		if current, ok := l.sessions[req.State]; ok && current == s {
+			delete(l.sessions, req.State)
+		}
+		l.mu.Unlock()
 		return pluginapi.AuthLoginPollResponse{Status: pluginapi.AuthLoginStatusError, Message: err.Error()}, nil
 	}
 	authDir := s.authDir
@@ -374,9 +480,11 @@ func (l *pkceLogin) servePage(req pluginapi.ManagementRequest) pluginapi.Managem
 		b.WriteString("<p>This login session expired or does not exist. In the management UI, click <b>Start " +
 			html.EscapeString(provider) + " Login</b> again to get a fresh login page.</p>")
 	} else {
-		b.WriteString("<p>Open the approval URL from the login card in a browser and approve. " +
-			"OpenRouter redirects to a host-loopback address your browser cannot reach: " +
-			"copy the full callback URL from your address bar and paste it into the block below. " +
+		b.WriteString("<p><a href=\"" + html.EscapeString(s.approvalURL) + "\">Open the OpenRouter approval page</a> " +
+			"in a browser and approve. A browser that can reach the host completes " +
+			"through the host callback on its own; otherwise OpenRouter redirects to " +
+			"a host-loopback address your browser cannot reach: copy the full callback " +
+			"URL from your address bar and paste it into the block below. " +
 			"Set CLIPROXY_BASE to the host's public base URL (for example https://host:port). " +
 			"On a remote host always use https:// so the management key and the callback URL " +
 			"are encrypted in transit; plain http:// is only acceptable on a loopback address you trust. " +
@@ -443,7 +551,18 @@ func (l *pkceLogin) serveSubmit(req pluginapi.ManagementRequest) pluginapi.Manag
 	if err != nil {
 		return pkceJSON(http.StatusBadRequest, "invalid_auth", "cannot store the approval; start a new login")
 	}
-	if err := os.WriteFile(oauthFile(s.authDir, state), stored, 0600); err != nil {
+	// Publish through a temporary file plus atomic rename so a concurrent
+	// poll can never read a partial approval.
+	target := oauthFile(s.authDir, state)
+	tmp, err := os.CreateTemp(s.authDir, ".oauth-openrouter-*")
+	if err != nil {
+		return pkceJSON(http.StatusBadGateway, "login_unavailable", "cannot store the approval; start a new login")
+	}
+	tmpPath := tmp.Name()
+	_, errWrite := tmp.Write(stored)
+	errClose := tmp.Close()
+	if errWrite != nil || errClose != nil || os.Rename(tmpPath, target) != nil {
+		_ = os.Remove(tmpPath)
 		return pkceJSON(http.StatusBadGateway, "login_unavailable", "cannot store the approval; start a new login")
 	}
 	return pluginapi.ManagementResponse{StatusCode: http.StatusOK,
