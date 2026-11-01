@@ -85,6 +85,10 @@ func TestPKCELoginRequiresConfig(t *testing.T) {
 	if _, err := p.StartLogin(context.Background(), pluginapi.AuthLoginStartRequest{Provider: "openrouter"}); err == nil {
 		t.Fatal("login started without a host base URL")
 	}
+	if _, err := p.StartLogin(context.Background(), pluginapi.AuthLoginStartRequest{Provider: "openrouter",
+		BaseURL: pkceBaseURL}); err == nil {
+		t.Fatal("login started without a host auth directory")
+	}
 	// No management routes are needed: the panel dialog drives the approval
 	// and the host OAuth callback stores the code.
 	unregistered, err := newPKCELogin(p.ParseAuth, &fakePKCEClient{})
@@ -220,6 +224,35 @@ func TestPKCEHostErrorFile(t *testing.T) {
 	again, err := p.PollLogin(ctx, pluginapi.AuthLoginPollRequest{State: start.State})
 	if err != nil || again.Status != pluginapi.AuthLoginStatusError {
 		t.Fatalf("denied login not closed: %+v %v", again, err)
+	}
+}
+
+// TestPKCEMismatchedStateFileCloses covers a code file minted for another
+// login landing under this session's filename: the poll errors without
+// touching the exchange, and the session is dropped so later polls stay
+// Error.
+func TestPKCEMismatchedStateFileCloses(t *testing.T) {
+	ctx := context.Background()
+	p, _ := pkceProvider(t, &fakePKCEClient{})
+	authDir := t.TempDir()
+	start := startPKCE(t, p, authDir)
+	raw, err := json.Marshal(map[string]any{"code": "attackercode", "state": "0123456789abcdef0123456789abcdef"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(oauthFile(authDir, start.State), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	done, err := p.PollLogin(ctx, pluginapi.AuthLoginPollRequest{State: start.State})
+	if err != nil || done.Status != pluginapi.AuthLoginStatusError {
+		t.Fatalf("mismatched approval not an error: %+v %v", done, err)
+	}
+	if !strings.Contains(done.Message, "different login") {
+		t.Fatalf("wrong error message: %q", done.Message)
+	}
+	again, err := p.PollLogin(ctx, pluginapi.AuthLoginPollRequest{State: start.State})
+	if err != nil || again.Status != pluginapi.AuthLoginStatusError {
+		t.Fatalf("mismatched login not closed: %+v %v", again, err)
 	}
 }
 

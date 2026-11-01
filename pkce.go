@@ -147,8 +147,14 @@ func (l *pkceLogin) StartLogin(_ context.Context, req pluginapi.AuthLoginStartRe
 	}
 	u, err := url.Parse(strings.TrimSpace(req.BaseURL))
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" ||
-		strings.ContainsAny(u.Host, " \t\r\n'\"") {
+		strings.ContainsAny(u.Host, " \t\r\n'\"") || u.User != nil {
 		return pluginapi.AuthLoginStartResponse{}, &pluginabi.Error{Code: "login_unavailable", Message: "host login base URL is missing", HTTPStatus: 500}
+	}
+	authDir := strings.TrimSpace(req.Host.AuthDir)
+	if authDir == "" {
+		// The plugin depends entirely on the host-written code file: without
+		// an auth directory every login would sit Pending until expiry.
+		return pluginapi.AuthLoginStartResponse{}, &pluginabi.Error{Code: "login_unavailable", Message: "host auth directory is missing", HTTPStatus: 500}
 	}
 	verifier, err := pkceVerifier()
 	if err != nil {
@@ -165,7 +171,6 @@ func (l *pkceLogin) StartLogin(_ context.Context, req pluginapi.AuthLoginStartRe
 	authURL := oauthAuthorizeURL + "?callback_url=" + url.QueryEscape(callback) +
 		"&code_challenge=" + url.QueryEscape(pkceChallenge(verifier)) +
 		"&code_challenge_method=S256"
-	authDir := strings.TrimSpace(req.Host.AuthDir)
 	sweepStaleOAuthFiles(authDir, time.Now())
 	now := time.Now()
 	l.mu.Lock()
@@ -309,10 +314,19 @@ func (l *pkceLogin) PollLogin(ctx context.Context, req pluginapi.AuthLoginPollRe
 	var stored struct {
 		Code  string `json:"code"`
 		Error string `json:"error"`
+		State string `json:"state"`
 	}
 	if json.Unmarshal(raw, &stored) != nil {
 		drop()
 		return pluginapi.AuthLoginPollResponse{Status: pluginapi.AuthLoginStatusError, Message: "stored approval is invalid; start a new login"}, nil
+	}
+	// Bind the file to this session: a code minted for another login must
+	// never be exchanged here, even though the PKCE verifier binding would
+	// already make that exchange fail at OpenRouter. Files that predate the
+	// state echo carry no state and still verify as before.
+	if other := strings.TrimSpace(stored.State); other != "" && other != req.State {
+		drop()
+		return pluginapi.AuthLoginPollResponse{Status: pluginapi.AuthLoginStatusError, Message: "stored approval is for a different login; start a new login"}, nil
 	}
 	if strings.TrimSpace(stored.Error) != "" {
 		drop()
@@ -350,6 +364,14 @@ func (l *pkceLogin) PollLogin(ctx context.Context, req pluginapi.AuthLoginPollRe
 		mapped := kit.MapError(err)
 		message := mapped.Message
 		message = strings.ReplaceAll(message, key, "[redacted]")
+		if enc := url.QueryEscape(key); enc != key {
+			message = strings.ReplaceAll(message, enc, "[redacted]")
+		}
+		if qb, err := json.Marshal(key); err == nil {
+			if esc := strings.Trim(string(qb), `"`); esc != key {
+				message = strings.ReplaceAll(message, esc, "[redacted]")
+			}
+		}
 		return pluginapi.AuthLoginPollResponse{Status: pluginapi.AuthLoginStatusError, Message: message}, nil
 	}
 	if !out.Handled {
