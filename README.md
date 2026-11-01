@@ -181,14 +181,14 @@ the guard; errors are never cached.
 |---|---|---|---|
 | Key credit limit | `<daily\|weekly\|monthly\|lifetime\|unknown-reset> key limit` | `limit_remaining / limit`, clamped to 0-1 | `budgets[scope=key_limit].resets_at` when plausible, else the UTC calendar rule; none for lifetime/unknown |
 | Key credit limit | `Key limit: UNREADABLE (plugin refuses requests)` (`limit` present but not a number) | 0 | none |
+| Budgets | `<interval> <member guardrail\|key guardrail\|workspace\|unknown> budget`, one per `budgets[]` entry except `key_limit` (max 16) | `remaining_usd / limit_usd` (or `limit_usd - spend_usd`) | `resets_at`, else the calendar rule |
+| Free models (:free) | `daily free-model requests` (when the daily limit is above 0) | `remaining / limit` | next 00:00 UTC |
+| Account credits | `account credit balance (no reset; top-up)` (when `/credits` answers) | `(total_credits - total_usage) / total_credits` | none |
 
 A key without a limit shows no key-limit bucket at all: a 0-fraction bucket
 reads as exhausted. The card keeps the `NO KEY LIMIT` tier, the spend
 counters, and the account balance; whether requests are admitted is the spend
 guard's job (`allow_unlimited_key`), not the card's.
-| Budgets | `<interval> <member guardrail\|key guardrail\|workspace\|unknown> budget`, one per `budgets[]` entry except `key_limit` (max 16) | `remaining_usd / limit_usd` (or `limit_usd - spend_usd`) | `resets_at`, else the calendar rule |
-| Free models (:free) | `daily free-model requests` (when the daily limit is above 0) | `remaining / limit` | next 00:00 UTC |
-| Account credits | `account credit balance (no reset; top-up)` (when `/credits` answers) | `(total_credits - total_usage) / total_credits` | none |
 
 For example, the live key (weekly $5 limit, nothing spent, read on Sunday
 2026-11-01) shows `weekly key limit` with fraction 1, reset
