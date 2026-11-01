@@ -73,15 +73,20 @@ func TestExecuteStreamRequestShapeAndUnbufferedRelay(t *testing.T) {
 	h := newHarness(t, fixture(t, "key_monthly_limit.json"))
 	sse := fixture(t, "ok_stream_processing_comments.sse")
 	parts := bytes.SplitAfter(sse, []byte("\n\n"))
-	host := &fakeHost{chunks: parts, gate: make(chan struct{}), headers: http.Header{"Content-Type": {"text/event-stream"}}}
-	stream, err := h.exec.ExecuteStream(context.Background(), execRequest(host, `{"model":"openrouter/openrouter/free","messages":[]}`))
+	// The first write carries both comments and the first event; the host
+	// holds the rest back until the first event has reached the caller.
+	chunks := [][]byte{bytes.Join(parts[:3], nil), bytes.Join(parts[3:], nil)}
+	host := &fakeHost{chunks: chunks, gate: make(chan struct{}), headers: http.Header{"Content-Type": {"text/event-stream"}}}
+	req := execRequest(host, `{"model":"openrouter/openrouter/free","messages":[]}`)
+	req.Metadata = map[string]any{"request_path": "/v1/chat/completions"}
+	stream, err := h.exec.ExecuteStream(context.Background(), req)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var got bytes.Buffer
+	var got []string
 	select {
 	case c := <-stream.Chunks:
-		got.Write(c.Payload)
+		got = append(got, string(c.Payload))
 		close(host.gate)
 	case <-time.After(5 * time.Second):
 		t.Fatal("stream was buffered")
@@ -90,16 +95,22 @@ func TestExecuteStreamRequestShapeAndUnbufferedRelay(t *testing.T) {
 		if c.Err != nil {
 			t.Fatal(c.Err)
 		}
-		got.Write(c.Payload)
+		got = append(got, string(c.Payload))
 	}
-	if !bytes.Equal(got.Bytes(), sse) {
-		t.Fatalf("stream altered:\n%s", got.Bytes())
+	// One bare JSON event per chunk; comments and [DONE] are dropped (the
+	// host and the OpenAI handler add the SSE framing and [DONE]).
+	want := []string{
+		`{"id":"gen-example","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":"hi"},"finish_reason":null}]}`,
+		`{"id":"gen-example","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":1,"total_tokens":4,"cost":0.00001}}`,
 	}
-	req := host.calls()[0]
-	if req.Headers.Get("Accept") != "text/event-stream" {
-		t.Fatalf("accept %q", req.Headers.Get("Accept"))
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("events %q", got)
 	}
-	jsonEqual(t, req.Body, `{"model":"openrouter/free","messages":[],"stream":true}`)
+	call := host.calls()[0]
+	if call.Headers.Get("Accept") != "text/event-stream" {
+		t.Fatalf("accept %q", call.Headers.Get("Accept"))
+	}
+	jsonEqual(t, call.Body, `{"model":"openrouter/free","messages":[],"stream":true}`)
 }
 
 func TestMidStreamErrorIsRelayedRaw(t *testing.T) {
@@ -110,15 +121,20 @@ func TestMidStreamErrorIsRelayedRaw(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var got bytes.Buffer
+	var got [][]byte
 	for c := range stream.Chunks {
 		if c.Err != nil {
 			t.Fatal(c.Err)
 		}
-		got.Write(c.Payload)
+		got = append(got, c.Payload)
 	}
-	if !bytes.Equal(got.Bytes(), sse) {
-		t.Fatal("mid-stream error chunk was altered")
+	// Each event keeps its data unchanged, framed for the host translator.
+	var want [][]byte
+	for _, frame := range bytes.Split(bytes.TrimSpace(sse), []byte("\n\n")) {
+		want = append(want, frame)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("mid-stream error chunk was altered: %q", got)
 	}
 }
 

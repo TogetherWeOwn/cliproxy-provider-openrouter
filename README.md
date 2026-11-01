@@ -127,8 +127,14 @@ native `POST /api/v1/messages` works live, but this plugin does not use it). The
 through unchanged except `model` and `stream`, including `provider`, `models`,
 `reasoning`, `plugins` and `session_id`. Headers are exactly `Authorization`,
 `Content-Type` and `Accept`; raw HTTP requests cannot change the URL, method or
-headers. Streams are relayed unbuffered, including OpenRouter's
-`: OPENROUTER PROCESSING` comments and the final usage chunk. A `200` whose
+headers. Streams are relayed unbuffered, one SSE event per chunk, including the
+final usage chunk; comments are dropped (`: OPENROUTER PROCESSING`), and so is
+`[DONE]`, which the host appends itself. OpenAI chat clients get bare JSON
+events (the host skips translation for this same-format stream and its handler
+adds `data: `); every other client format gets `data:`-framed events for the
+host translator. The plugin tells them apart by the inbound route the host
+records (`request_path`), because the host reports the plugin's own `openai`
+format as the source format for every client. A `200` whose
 content is `null` with `finish_reason: "length"` is a success: reasoning used up
 `max_tokens` (seen live); raise `max_tokens`.
 
@@ -286,8 +292,8 @@ on the RPC error type.
 ## Mid-stream errors
 
 When OpenRouter fails after a stream has started (HTTP 200 followed by a chunk
-with `finish_reason: "error"`), the chunk is relayed raw and not classified, as in
-the other provider plugins.
+with `finish_reason: "error"`), the event is relayed unchanged and not
+classified, as in the other provider plugins.
 
 ## Build, test, package
 

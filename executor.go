@@ -85,7 +85,12 @@ func (e executor) Execute(ctx context.Context, r pluginapi.ExecutorRequest) (plu
 
 func (e executor) ExecuteStream(ctx context.Context, r pluginapi.ExecutorRequest) (pluginapi.ExecutorStreamResponse, error) {
 	r.Stream = true
-	return e.passthrough(r.AuthID, upstreamModel(r.Payload), &r.Stream).ExecuteStream(ctx, r)
+	out, err := e.passthrough(r.AuthID, upstreamModel(r.Payload), &r.Stream).ExecuteStream(ctx, r)
+	if err != nil {
+		return out, err
+	}
+	out.Chunks = frameEvents(ctx, out.Chunks, clientWantsBareJSON(r))
+	return out, nil
 }
 
 func (e executor) HttpRequest(ctx context.Context, r pluginapi.ExecutorHTTPRequest) (pluginapi.ExecutorHTTPResponse, error) {

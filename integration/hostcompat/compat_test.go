@@ -20,14 +20,20 @@ import (
 	"time"
 	_ "unsafe" // go:linkname, see applyModelPrefixes
 
+	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/pluginhost"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/pluginstore"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
+	_ "github.com/router-for-me/CLIProxyAPI/v8/internal/translator" // the host's built-in translators, as in cmd/server
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/api/handlers"
+	claudehandlers "github.com/router-for-me/CLIProxyAPI/v8/sdk/api/handlers/claude"
+	openaihandlers "github.com/router-for-me/CLIProxyAPI/v8/sdk/api/handlers/openai"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	coreexec "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
+	sdkconfig "github.com/router-for-me/CLIProxyAPI/v8/sdk/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 	translator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
 	"gopkg.in/yaml.v3"
@@ -68,6 +74,59 @@ const catalog = `{"data":[
 {"id":"openrouter/auto","name":"Auto Router","pricing":{"prompt":"-1","completion":"-1"}},
 {"id":"~anthropic/claude-sonnet-latest","name":"","pricing":{"prompt":"0.000003","completion":"0.000015"}}
 ]}`
+
+// packedTokens are the deltas of packedSSE, in order.
+var packedTokens = []string{"OK", "!", " How", " can", " I", " assist", " you", " today", "?"}
+
+var packedSSE = func() string {
+	var b strings.Builder
+	b.WriteString(": OPENROUTER PROCESSING\n\n")
+	for i, tok := range packedTokens {
+		delta := map[string]any{"content": tok}
+		if i == 0 {
+			delta["role"] = "assistant"
+		}
+		raw, _ := json.Marshal(map[string]any{"id": "gen-example", "object": "chat.completion.chunk", "model": "anthropic/claude-sonnet-4.5", "choices": []any{map[string]any{"index": 0, "delta": delta, "finish_reason": nil}}})
+		b.WriteString("data: " + string(raw) + "\n\n")
+		if i == 3 {
+			b.WriteString(": OPENROUTER PROCESSING\n\n")
+		}
+	}
+	b.WriteString(`data: {"id":"gen-example","object":"chat.completion.chunk","model":"anthropic/claude-sonnet-4.5","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}` + "\n\n")
+	b.WriteString(`data: {"id":"gen-example","object":"chat.completion.chunk","model":"anthropic/claude-sonnet-4.5","choices":[],"usage":{"prompt_tokens":3,"completion_tokens":9,"total_tokens":12}}` + "\n\n")
+	b.WriteString("data: [DONE]\n\n")
+	return b.String()
+}()
+
+// sseData returns the data payload of every event in a client SSE body, and
+// fails on a frame that is not a well-formed event.
+func sseData(t *testing.T, body string) []string {
+	t.Helper()
+	var out []string
+	for _, frame := range strings.Split(body, "\n\n") {
+		if strings.TrimSpace(frame) == "" {
+			continue
+		}
+		var data []string
+		for _, line := range strings.Split(frame, "\n") {
+			switch {
+			case strings.HasPrefix(line, "data: "):
+				data = append(data, strings.TrimPrefix(line, "data: "))
+			case strings.HasPrefix(line, "event: "):
+			default:
+				t.Fatalf("malformed SSE line %q in\n%s", line, body)
+			}
+		}
+		if len(data) != 1 {
+			t.Fatalf("frame without exactly one data line %q", frame)
+		}
+		if d := data[0]; d != "[DONE]" && !json.Valid([]byte(d)) {
+			t.Fatalf("event data is not JSON: %q", d)
+		}
+		out = append(out, data[0])
+	}
+	return out
+}
 
 // upstream is a loopback stand-in for openrouter.ai. Behavior is keyed by the
 // API key so one plugin instance serves every scenario.
@@ -142,6 +201,12 @@ func (u *upstream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(403)
 				io.WriteString(w, `{"error":{"code":403,"message":"Input was flagged by moderation","metadata":{"reasons":["example"]}}}`)
 			}
+			return
+		}
+		if body["stream"] == true && key == "packed-key" {
+			// Every event and a comment in one write, as OpenRouter can send them.
+			w.Header().Set("Content-Type", "text/event-stream")
+			io.WriteString(w, packedSSE)
 			return
 		}
 		if body["stream"] == true {
@@ -316,7 +381,7 @@ func TestRealHostLoader(t *testing.T) {
 	if err != nil || !strings.Contains(string(resp.Payload), `"content":"hello"`) {
 		t.Fatalf("execute %s %v", resp.Payload, err)
 	}
-	// (7) Streaming is relayed unbuffered.
+	// (7) Streaming is relayed unbuffered, one event per chunk.
 	t.Run("streaming is unbuffered", func(t *testing.T) {
 		streamReq := coreexec.Request{Model: modelB, Format: translator.FormatOpenAI, Payload: []byte(`{"model":"` + modelB + `","stream":true,"fixture_gate":true,"messages":[{"role":"user","content":"hello"}]}`)}
 		streamOpts := opts
@@ -325,13 +390,13 @@ func TestRealHostLoader(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		var chunks strings.Builder
+		var chunks []string
 		select {
 		case c := <-stream.Chunks:
 			if c.Err != nil || len(c.Payload) == 0 {
 				t.Fatalf("first chunk %+v", c)
 			}
-			chunks.Write(c.Payload)
+			chunks = append(chunks, string(c.Payload))
 			close(up.gate)
 		case <-time.After(20 * time.Second):
 			t.Fatal("stream buffered until completion")
@@ -340,10 +405,12 @@ func TestRealHostLoader(t *testing.T) {
 			if c.Err != nil {
 				t.Fatal(c.Err)
 			}
-			chunks.Write(c.Payload)
+			chunks = append(chunks, string(c.Payload))
 		}
-		if !strings.Contains(chunks.String(), "[DONE]") {
-			t.Fatalf("stream %s", chunks.String())
+		// One event per chunk; the comment and [DONE] are dropped. With no
+		// inbound route recorded, events keep their "data:" framing.
+		if len(chunks) != 2 || !strings.HasPrefix(chunks[0], `data: {"id":"gen-example"`) || !strings.Contains(chunks[1], `"content":"lo"`) || strings.Contains(strings.Join(chunks, ""), "[DONE]") {
+			t.Fatalf("stream %q", chunks)
 		}
 	})
 
@@ -367,6 +434,84 @@ func TestRealHostLoader(t *testing.T) {
 	call := func(model string, extra string) coreexec.Request {
 		return coreexec.Request{Model: model, Format: translator.FormatOpenAI, Payload: []byte(`{"model":"` + model + `"` + extra + `,"messages":[{"role":"user","content":"hello"}]}`)}
 	}
+
+	t.Run("client SSE through the real OpenAI and Claude handlers", func(t *testing.T) {
+		gin.SetMode(gin.TestMode)
+		mgr := coreauth.NewManager(nil, nil, nil)
+		mgr.SetRetryConfig(0, 0, 1)
+		mgr.RegisterExecutor(ex)
+		register(t, mgr, parse("packed.json", `{"type":"openrouter","api_key":"packed-key"}`), "packed-auth", "0", modelA)
+		base := handlers.NewBaseAPIHandlers(&sdkconfig.SDKConfig{}, mgr)
+		router := gin.New()
+		router.POST("/v1/chat/completions", openaihandlers.NewOpenAIAPIHandler(base).ChatCompletions)
+		router.POST("/v1/messages", claudehandlers.NewClaudeCodeAPIHandler(base).ClaudeMessages)
+		post := func(t *testing.T, path, body string) string {
+			t.Helper()
+			req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("%s: status %d %s", path, rec.Code, rec.Body.String())
+			}
+			out := rec.Body.String()
+			if strings.Contains(out, "data: data:") || strings.Contains(out, "OPENROUTER PROCESSING") {
+				t.Fatalf("%s: raw upstream framing reached the client:\n%s", path, out)
+			}
+			return out
+		}
+		want := strings.Join(packedTokens, "")
+
+		t.Run("OpenAI chat", func(t *testing.T) {
+			out := post(t, "/v1/chat/completions", `{"model":"`+modelA+`","stream":true,"messages":[{"role":"user","content":"hi"}]}`)
+			if strings.Count(out, "[DONE]") != 1 || !strings.HasSuffix(out, "data: [DONE]\n\n") {
+				t.Fatalf("[DONE] framing:\n%s", out)
+			}
+			var text strings.Builder
+			for _, d := range sseData(t, out) {
+				var ev struct {
+					Choices []struct {
+						Delta struct {
+							Content string `json:"content"`
+						} `json:"delta"`
+					} `json:"choices"`
+				}
+				if d != "[DONE]" && json.Unmarshal([]byte(d), &ev) == nil && len(ev.Choices) > 0 {
+					text.WriteString(ev.Choices[0].Delta.Content)
+				}
+			}
+			if text.String() != want {
+				t.Fatalf("tokens %q, want %q\n%s", text.String(), want, out)
+			}
+		})
+
+		t.Run("Claude messages", func(t *testing.T) {
+			out := post(t, "/v1/messages", `{"model":"`+modelA+`","max_tokens":16,"stream":true,"messages":[{"role":"user","content":"hi"}]}`)
+			var text strings.Builder
+			stops := 0
+			for _, d := range sseData(t, out) {
+				var ev struct {
+					Type  string `json:"type"`
+					Delta struct {
+						Type string `json:"type"`
+						Text string `json:"text"`
+					} `json:"delta"`
+				}
+				if json.Unmarshal([]byte(d), &ev) != nil {
+					t.Fatalf("event %q", d)
+				}
+				if ev.Type == "content_block_delta" && ev.Delta.Type == "text_delta" {
+					text.WriteString(ev.Delta.Text)
+				}
+				if ev.Type == "message_stop" {
+					stops++
+				}
+			}
+			if text.String() != want || stops != 1 {
+				t.Fatalf("tokens %q (want %q), message_stop %d\n%s", text.String(), want, stops, out)
+			}
+		})
+	})
 
 	t.Run("no-limit key is refused before any inference call", func(t *testing.T) {
 		_, err := ex.Execute(ctx, parse("nolimit.json", `{"type":"openrouter","api_key":"nolimit-key"}`), call(modelA, ""), opts)
