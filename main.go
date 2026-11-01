@@ -10,7 +10,7 @@ import (
 
 const (
 	provider     = "openrouter"
-	version      = "0.1.0"
+	version      = "0.2.0"
 	modelPrefix  = "openrouter/"
 	upstreamBase = "https://openrouter.ai/api/v1"
 )
@@ -31,14 +31,20 @@ func makePlugin(host kit.Caller) (*kit.Runtime, error) {
 	quota := newQuotaProvider(keys, g)
 	keys.onInvalidate = quota.Invalidate
 	models := newCatalog(g)
+	auth := newAuthProvider(g)
+	oauth, err := newPKCELogin(auth.ParseAuth, client)
+	if err != nil {
+		return nil, err
+	}
+	auth.oauth = oauth
 	return kit.New(kit.Definition{
 		Metadata:       pluginapi.Metadata{Name: provider, Version: version, Author: "TogetherWeOwn", GitHubRepository: "https://github.com/TogetherWeOwn/cliproxy-provider-openrouter"},
 		ModelNamespace: provider,
 		Configure:      configureBase,
 		Capabilities: pluginapi.Capabilities{
-			AuthProvider: newAuthProvider(g), ModelRegistrar: models, ModelProvider: models, Executor: newExecutor(g, keys),
+			AuthProvider: auth, ModelRegistrar: models, ModelProvider: models, Executor: newExecutor(g, keys),
 			ExecutorModelScope:   pluginapi.ExecutorModelScopeBoth,
-			ExecutorInputFormats: []string{"openai"}, ExecutorOutputFormats: []string{"openai"}, QuotaProvider: quota,
+			ExecutorInputFormats: []string{"openai"}, ExecutorOutputFormats: []string{"openai"}, QuotaProvider: quota, ManagementAPI: oauth,
 		},
 		OnShutdown: func(context.Context) error { client.CloseIdleConnections(); return nil },
 	}, host)

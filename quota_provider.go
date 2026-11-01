@@ -77,11 +77,12 @@ func keyGroup(r keyReading, c credentials, now time.Time) []pluginapi.QuotaBucke
 		return []pluginapi.QuotaBucket{{Window: "Key limit: UNREADABLE (plugin refuses requests)", RemainingFraction: 0, Description: "OpenRouter reported a key limit that is not a number."}}
 	}
 	if r.Limit == nil {
-		if c.allowUnlimited {
-			// An unbounded key is never shown as headroom.
-			return []pluginapi.QuotaBucket{{Window: "Key limit: NOT SET (UNBOUNDED spend)", RemainingFraction: 0, Description: "No credit limit is set; allow_unlimited_key admits requests and spend is limited only by account credits. Set a key limit at openrouter.ai/settings/keys."}}
-		}
-		return []pluginapi.QuotaBucket{{Window: "Key limit: NOT SET (plugin refuses requests)", RemainingFraction: 0, Description: "No credit limit is set on this key. Spend is unbounded, so the plugin refuses inference. Set a limit at openrouter.ai/settings/keys or set allow_unlimited_key."}}
+		// A key without a limit has no remaining fraction to show: a
+		// zero-fraction bucket reads as exhausted. Omit the bucket; the
+		// card keeps the NO KEY LIMIT tier, the spend counters, and the
+		// account balance. Whether requests are admitted is the guard's
+		// job (allow_unlimited_key), not the card's.
+		return nil
 	}
 	b := pluginapi.QuotaBucket{Window: r.Reset.String() + " key limit", ResetTime: resetText(r.KeyResetsAt, r.Reset, now)}
 	switch {

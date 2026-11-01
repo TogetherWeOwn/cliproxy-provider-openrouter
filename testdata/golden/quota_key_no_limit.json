@@ -32,17 +32,5 @@
       "format": "currency",
       "currency": "USD"
     }
-  ],
-  "groups": [
-    {
-      "displayName": "Key credit limit",
-      "buckets": [
-        {
-          "window": "Key limit: NOT SET (plugin refuses requests)",
-          "remainingFraction": 0,
-          "description": "No credit limit is set on this key. Spend is unbounded, so the plugin refuses inference. Set a limit at openrouter.ai/settings/keys or set allow_unlimited_key."
-        }
-      ]
-    }
   ]
 }

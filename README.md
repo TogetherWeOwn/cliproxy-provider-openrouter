@@ -84,6 +84,27 @@ holding it once the old path no longer exists.
 
 The plugin YAML has no settings. No CLIProxy configuration is required.
 
+## Management-UI login
+
+The management UI's **Start OpenRouter Login** card runs a real PKCE OAuth
+login: it opens the plugin's OAuth page, which links the OpenRouter approval
+URL and shows a kit-style shell block. A browser that can reach the host
+completes through the host's own OAuth callback on its own (the callback URL
+is tagged with the login state, which the host requires); otherwise the
+operator signs in and approves, then pastes the loopback callback URL from
+their address bar into the shell block. The callback URL travels in an
+authenticated management POST body (never in a URL, log or process argument);
+the plugin extracts the one-time code into a `0600`
+`.oauth-openrouter-<state>.oauth` file (published atomically), and the next
+poll exchanges it for an API key (`POST /api/v1/auth/keys`, code + verifier,
+S256) — exactly one poller runs the exchange — deletes the file, and runs the
+same ParseAuth validation and duplicate-key guard as an uploaded auth file, so
+logging in twice with the same key is idempotent. Expired sessions, evicted
+sessions, and dead polls take their code files with them, and a new login
+sweeps leftovers older than the session lifetime. On a remote host, serve the
+management UI over `https://` so the pasted callback URL is encrypted in
+transit.
+
 ## Models and execution
 
 Model discovery calls `GET /api/v1/models` per auth through the host HTTP client
@@ -159,12 +180,15 @@ the guard; errors are never cached.
 | Group | Bucket | Remaining fraction | Reset |
 |---|---|---|---|
 | Key credit limit | `<daily\|weekly\|monthly\|lifetime\|unknown-reset> key limit` | `limit_remaining / limit`, clamped to 0-1 | `budgets[scope=key_limit].resets_at` when plausible, else the UTC calendar rule; none for lifetime/unknown |
-| Key credit limit | `Key limit: NOT SET (plugin refuses requests)` | 0 | none |
 | Key credit limit | `Key limit: UNREADABLE (plugin refuses requests)` (`limit` present but not a number) | 0 | none |
-| Key credit limit | `Key limit: NOT SET (UNBOUNDED spend)` (with `allow_unlimited_key`) | 0 (an unbounded key is never shown as headroom) | none |
 | Budgets | `<interval> <member guardrail\|key guardrail\|workspace\|unknown> budget`, one per `budgets[]` entry except `key_limit` (max 16) | `remaining_usd / limit_usd` (or `limit_usd - spend_usd`) | `resets_at`, else the calendar rule |
 | Free models (:free) | `daily free-model requests` (when the daily limit is above 0) | `remaining / limit` | next 00:00 UTC |
 | Account credits | `account credit balance (no reset; top-up)` (when `/credits` answers) | `(total_credits - total_usage) / total_credits` | none |
+
+A key without a limit shows no key-limit bucket at all: a 0-fraction bucket
+reads as exhausted. The card keeps the `NO KEY LIMIT` tier, the spend
+counters, and the account balance; whether requests are admitted is the spend
+guard's job (`allow_unlimited_key`), not the card's.
 
 For example, the live key (weekly $5 limit, nothing spent, read on Sunday
 2026-11-01) shows `weekly key limit` with fraction 1, reset
