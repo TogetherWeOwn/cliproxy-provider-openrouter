@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"html"
 	"net/http"
 	"net/url"
 	"os"
@@ -20,9 +19,7 @@ import (
 var errFakeNoStream = errors.New("fake client does not stream")
 
 const (
-	pkceResourceBase = "/v0/resource/plugins/openrouter-id"
-	pkceSubmitPath   = "/v0/management/plugin-oauth/openrouter"
-	pkceBaseURL      = "http://127.0.0.1:19000/v0/management/oauth-callback"
+	pkceBaseURL = "http://127.0.0.1:19000/v0/management/oauth-callback"
 )
 
 // fakePKCEClient answers the key-exchange POST. It records the request body
@@ -54,10 +51,6 @@ func pkceProvider(t *testing.T, client pkceHTTPDoer) (*authProvider, *pkceLogin)
 		t.Fatal(err)
 	}
 	p.oauth = pkce
-	if _, err := pkce.RegisterManagement(context.Background(), pluginapi.ManagementRegistrationRequest{
-		BasePath: "/v0/management", ResourceBasePath: pkceResourceBase}); err != nil {
-		t.Fatal(err)
-	}
 	return p, pkce
 }
 
@@ -92,70 +85,57 @@ func TestPKCELoginRequiresConfig(t *testing.T) {
 	if _, err := p.StartLogin(context.Background(), pluginapi.AuthLoginStartRequest{Provider: "openrouter"}); err == nil {
 		t.Fatal("login started without a host base URL")
 	}
+	if _, err := p.StartLogin(context.Background(), pluginapi.AuthLoginStartRequest{Provider: "openrouter",
+		BaseURL: pkceBaseURL}); err == nil {
+		t.Fatal("login started without a host auth directory")
+	}
+	// No management routes are needed: the panel dialog drives the approval
+	// and the host OAuth callback stores the code.
 	unregistered, err := newPKCELogin(p.ParseAuth, &fakePKCEClient{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	p.oauth = unregistered // no RegisterManagement: page routes unknown
+	p.oauth = unregistered
 	if _, err := p.StartLogin(context.Background(), pluginapi.AuthLoginStartRequest{Provider: "openrouter",
-		BaseURL: pkceBaseURL, Host: pluginapi.HostConfigSummary{AuthDir: t.TempDir()}}); err == nil {
-		t.Fatal("login started without registered routes")
+		BaseURL: pkceBaseURL, Host: pluginapi.HostConfigSummary{AuthDir: t.TempDir()}}); err != nil {
+		t.Fatalf("login needs no registered routes: %v", err)
 	}
 }
 
-// approvalURLFromPage follows the login page the host login card points at
-// and extracts the approval link, the way an operator's browser would.
-func approvalURLFromPage(t *testing.T, page string) string {
+// storeHostCode writes the code file the way the host OAuth callback does
+// when the operator submits the pasted loopback URL through the panel.
+func storeHostCode(t *testing.T, authDir, state, code string) {
 	t.Helper()
-	i := strings.Index(page, `<a href="`+oauthAuthorizeURL)
-	if i < 0 {
-		t.Fatal("page missing the approval link")
+	raw, err := json.Marshal(map[string]any{"code": code, "state": state})
+	if err != nil {
+		t.Fatal(err)
 	}
-	rest := page[i+len(`<a href="`):]
-	j := strings.IndexByte(rest, '"')
-	if j < 0 {
-		t.Fatal("unterminated approval link")
+	if err := os.WriteFile(oauthFile(authDir, state), raw, 0600); err != nil {
+		t.Fatal(err)
 	}
-	return rest[:j]
 }
 
-// TestPKCELoginRoundTrip drives approval URL, paste-box submit, exchange,
+// TestPKCELoginRoundTrip drives approval URL, host callback file, exchange,
 // and poll through the provider's own ParseAuth pipeline.
 func TestPKCELoginRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	fake := &fakePKCEClient{status: http.StatusOK, body: `{"key":"sk-or-roundtrip-key"}`}
-	p, pkce := pkceProvider(t, fake)
+	p, _ := pkceProvider(t, fake)
 	authDir := t.TempDir()
 
 	start := startPKCE(t, p, authDir)
-	// The login card points at the plugin's OAuth page, kit-style: the page
-	// links the approval URL and carries the paste-box block.
-	if want := "http://127.0.0.1:19000" + pkceResourceBase + "/oauth?state=" + start.State; start.URL != want {
-		t.Fatalf("login URL %q, want page %q", start.URL, want)
-	}
+	// The login card opens the OpenRouter approval URL directly, the official
+	// pattern: the callback is the host loopback base tagged with the state,
+	// and the link carries the S256 challenge.
 	if start.State == "" {
 		t.Fatal("empty login state")
 	}
-
-	poll, err := p.PollLogin(ctx, pluginapi.AuthLoginPollRequest{State: start.State})
-	if err != nil || poll.Status != pluginapi.AuthLoginStatusPending {
-		t.Fatalf("fresh login not pending: %+v %v", poll, err)
-	}
-
-	page, err := pkce.HandleManagement(ctx, pluginapi.ManagementRequest{Method: "GET",
-		Path: pkceResourceBase + "/oauth", Query: map[string][]string{"state": {start.State}}})
-	if err != nil || page.StatusCode != 200 {
-		t.Fatalf("OAuth page %+v %v", page, err)
-	}
-	body := html.UnescapeString(string(page.Body))
-	if !strings.Contains(body, "read -r PLUGIN_CALLBACK_URL") {
-		t.Fatal("page missing the paste-box block")
-	}
-	// The approval link carries the S256 challenge and a state-tagged
-	// callback, so the host's own OAuth callback accepts the redirect.
-	approval, err := url.Parse(approvalURLFromPage(t, body))
+	approval, err := url.Parse(start.URL)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if approval.Scheme != "https" || approval.Host != "openrouter.ai" || approval.Path != "/auth" {
+		t.Fatalf("login URL %q is not the OpenRouter approval URL", start.URL)
 	}
 	aq := approval.Query()
 	if aq.Get("code_challenge") == "" || aq.Get("code_challenge_method") != "S256" {
@@ -166,12 +146,15 @@ func TestPKCELoginRoundTrip(t *testing.T) {
 		t.Fatalf("callback lost the login state: %q", aq.Get("callback_url"))
 	}
 
-	submit, err := pkce.HandleManagement(ctx, pluginapi.ManagementRequest{Method: "POST",
-		Path: pkceSubmitPath,
-		Body: []byte(`{"state":"` + start.State + `","callback_url":"http://127.0.0.1:9999/cb?code=authcode123&state=ignored"}`)})
-	if err != nil || submit.StatusCode != 200 {
-		t.Fatalf("submit %+v %v", submit, err)
+	poll, err := p.PollLogin(ctx, pluginapi.AuthLoginPollRequest{State: start.State})
+	if err != nil || poll.Status != pluginapi.AuthLoginStatusPending {
+		t.Fatalf("fresh login not pending: %+v %v", poll, err)
 	}
+	if !strings.Contains(poll.Message, "callback box") {
+		t.Fatalf("pending does not point at the panel callback box: %q", poll.Message)
+	}
+
+	storeHostCode(t, authDir, start.State, "authcode123")
 	stored, err := os.ReadFile(filepath.Join(authDir, pkceFilePrefix+start.State+pkceFileSuffix))
 	if err != nil {
 		t.Fatal(err)
@@ -210,55 +193,106 @@ func TestPKCELoginRoundTrip(t *testing.T) {
 	}
 }
 
-// TestPKCESubmitRejectsBadCallbacks covers missing/denied codes, unknown
-// states, and malformed bodies without echoing the callback URL.
-func TestPKCESubmitRejectsBadCallbacks(t *testing.T) {
+// TestPKCEHostErrorFile covers the host-recorded approval error (the operator
+// denied access, or pasted a URL without a code): the login closes with an
+// error that never echoes the callback, and the file is gone.
+func TestPKCEHostErrorFile(t *testing.T) {
 	ctx := context.Background()
 	p, _ := pkceProvider(t, &fakePKCEClient{})
 	authDir := t.TempDir()
 	start := startPKCE(t, p, authDir)
+	raw, err := json.Marshal(map[string]any{"state": start.State, "error": "access_denied"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(oauthFile(authDir, start.State), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	done, err := p.PollLogin(ctx, pluginapi.AuthLoginPollRequest{State: start.State})
+	if err != nil || done.Status != pluginapi.AuthLoginStatusError {
+		t.Fatalf("denied approval not an error: %+v %v", done, err)
+	}
+	if !strings.Contains(done.Message, "approval error") {
+		t.Fatalf("wrong error message: %q", done.Message)
+	}
+	if strings.Contains(done.Message, "access_denied") {
+		t.Fatalf("error echoed the callback: %q", done.Message)
+	}
+	if _, err := os.Stat(oauthFile(authDir, start.State)); !os.IsNotExist(err) {
+		t.Fatal("error file left for replay")
+	}
+	again, err := p.PollLogin(ctx, pluginapi.AuthLoginPollRequest{State: start.State})
+	if err != nil || again.Status != pluginapi.AuthLoginStatusError {
+		t.Fatalf("denied login not closed: %+v %v", again, err)
+	}
+}
+
+// TestPKCEMismatchedStateFileCloses covers a code file minted for another
+// login landing under this session's filename: the poll errors without
+// touching the exchange, and the session is dropped so later polls stay
+// Error.
+func TestPKCEMismatchedStateFileCloses(t *testing.T) {
+	ctx := context.Background()
+	p, _ := pkceProvider(t, &fakePKCEClient{})
+	authDir := t.TempDir()
+	start := startPKCE(t, p, authDir)
+	raw, err := json.Marshal(map[string]any{"code": "attackercode", "state": "0123456789abcdef0123456789abcdef"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(oauthFile(authDir, start.State), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	done, err := p.PollLogin(ctx, pluginapi.AuthLoginPollRequest{State: start.State})
+	if err != nil || done.Status != pluginapi.AuthLoginStatusError {
+		t.Fatalf("mismatched approval not an error: %+v %v", done, err)
+	}
+	if !strings.Contains(done.Message, "different login") {
+		t.Fatalf("wrong error message: %q", done.Message)
+	}
+	again, err := p.PollLogin(ctx, pluginapi.AuthLoginPollRequest{State: start.State})
+	if err != nil || again.Status != pluginapi.AuthLoginStatusError {
+		t.Fatalf("mismatched login not closed: %+v %v", again, err)
+	}
+}
+
+// TestPKCEInvalidCodeFileCloses covers a claimed-but-useless code file: corrupt
+// JSON, or a record with neither code nor error (e.g. the host persisted a
+// pasted approval URL instead of the redirect URL). The first poll errors, and
+// the dead session is dropped so later polls stay Error instead of regressing
+// to Pending forever on a login that can never complete.
+func TestPKCEInvalidCodeFileCloses(t *testing.T) {
+	ctx := context.Background()
 	for _, tc := range []struct {
-		name, state, body, want string
+		name string
+		raw  func(state string) []byte
 	}{
-		{"unknown state", "nope", `{"state":"nope","callback_url":"http://127.0.0.1:9/cb?code=x"}`, "login_expired"},
-		{"not json", start.State, `{`, "invalid_request"},
-		{"missing url", start.State, `{"state":"` + start.State + `"}`, "a callback URL is required"},
-		{"not a url", start.State, `{"state":"` + start.State + `","callback_url":":::"}`, "not a URL"},
-		{"no code", start.State, `{"state":"` + start.State + `","callback_url":"http://127.0.0.1:9/cb?state=x"}`, "no approval code"},
-		{"denied", start.State, `{"state":"` + start.State + `","callback_url":"http://127.0.0.1:9/cb?error=access_denied"}`, "approval error"},
+		{"corrupt", func(state string) []byte { return []byte(`{"code":`) }},
+		{"codeless", func(state string) []byte { return []byte(`{"state":"` + state + `"}`) }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			resp, err := p.oauth.HandleManagement(ctx, pluginapi.ManagementRequest{Method: "POST",
-				Path: pkceSubmitPath, Body: []byte(tc.body)})
-			if err != nil {
+			p, _ := pkceProvider(t, &fakePKCEClient{})
+			authDir := t.TempDir()
+			start := startPKCE(t, p, authDir)
+			if err := os.WriteFile(oauthFile(authDir, start.State), tc.raw(start.State), 0600); err != nil {
 				t.Fatal(err)
 			}
-			if resp.StatusCode != 400 || !strings.Contains(string(resp.Body), tc.want) {
-				t.Fatalf("got %+v, want %q", resp, tc.want)
+			done, err := p.PollLogin(ctx, pluginapi.AuthLoginPollRequest{State: start.State})
+			if err != nil || done.Status != pluginapi.AuthLoginStatusError {
+				t.Fatalf("invalid approval not an error: %+v %v", done, err)
 			}
-			if strings.Contains(string(resp.Body), "authcode") || strings.Contains(string(resp.Body), "127.0.0.1:9/cb") {
-				t.Fatalf("rejection echoed the callback: %s", resp.Body)
+			if !strings.Contains(done.Message, "stored approval is invalid") {
+				t.Fatalf("wrong error message: %q", done.Message)
+			}
+			again, err := p.PollLogin(ctx, pluginapi.AuthLoginPollRequest{State: start.State})
+			if err != nil || again.Status != pluginapi.AuthLoginStatusError {
+				t.Fatalf("dead login regressed to %+v %v; want Error", again, err)
+			}
+			if again.Status == pluginapi.AuthLoginStatusPending {
+				t.Fatalf("dead login reports Pending: %q", again.Message)
 			}
 		})
 	}
-}
-
-func submitCallbackURL(t *testing.T, l *pkceLogin, state, callbackURL string) {
-	t.Helper()
-	submit, err := l.HandleManagement(context.Background(), pluginapi.ManagementRequest{Method: "POST",
-		Path: pkceSubmitPath,
-		Body: []byte(`{"state":"` + state + `","callback_url":` + jsonString(callbackURL) + `}`)})
-	if err != nil || submit.StatusCode != 200 {
-		t.Fatalf("submit %+v %v", submit, err)
-	}
-}
-
-func jsonString(s string) string {
-	raw, err := json.Marshal(s)
-	if err != nil {
-		panic(err)
-	}
-	return string(raw)
 }
 
 // blockingPKCEClient holds the exchange open so a second poller is forced to
@@ -288,7 +322,7 @@ func TestPKCEConcurrentPollSingleExchange(t *testing.T) {
 	p, _ := pkceProvider(t, gated)
 	authDir := t.TempDir()
 	start := startPKCE(t, p, authDir)
-	submitCallbackURL(t, p.oauth, start.State, "http://127.0.0.1:9/cb?code=racecode")
+	storeHostCode(t, authDir, start.State, "racecode")
 
 	var wg sync.WaitGroup
 	got := make([]pluginapi.AuthLoginPollResponse, 2)
@@ -330,7 +364,7 @@ func TestPKCEEvictionRemovesCodeFile(t *testing.T) {
 	p, _ := pkceProvider(t, &fakePKCEClient{})
 	authDir := t.TempDir()
 	first := startPKCE(t, p, authDir)
-	submitCallbackURL(t, p.oauth, first.State, "http://127.0.0.1:9/cb?code=evictme")
+	storeHostCode(t, authDir, first.State, "evictme")
 	file := filepath.Join(authDir, pkceFilePrefix+first.State+pkceFileSuffix)
 	if _, err := os.Stat(file); err != nil {
 		t.Fatal(err)
@@ -425,12 +459,7 @@ func TestPKCEExchangeFailure(t *testing.T) {
 	p, _ := pkceProvider(t, fake)
 	authDir := t.TempDir()
 	start := startPKCE(t, p, authDir)
-	submit, err := p.oauth.HandleManagement(ctx, pluginapi.ManagementRequest{Method: "POST",
-		Path: pkceSubmitPath,
-		Body: []byte(`{"state":"` + start.State + `","callback_url":"http://127.0.0.1:9/cb?code=spentcode"}`)})
-	if err != nil || submit.StatusCode != 200 {
-		t.Fatalf("submit %+v %v", submit, err)
-	}
+	storeHostCode(t, authDir, start.State, "spentcode")
 	done, err := p.PollLogin(ctx, pluginapi.AuthLoginPollRequest{State: start.State, HTTPClient: fake})
 	if err != nil || done.Status != pluginapi.AuthLoginStatusError {
 		t.Fatalf("failed exchange not an error: %+v %v", done, err)
