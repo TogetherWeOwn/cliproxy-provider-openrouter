@@ -41,7 +41,7 @@ Create one auth file per key (mode `0600`) with the README schema. Do not set an
 
 ## 3. Staging acceptance
 
-1. Plugin registered with version 0.2.1 and quota support; the auth parses and
+1. Plugin registered with version 0.2.2 and quota support; the auth parses and
    persists; a second file with the same key is rejected.
 2. The model list contains only `openrouter/...` IDs and no `-1` router.
 3. The quota card shows one `OpenRouter` group with short-labelled bars (key

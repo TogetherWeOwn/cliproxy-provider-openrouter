@@ -10,7 +10,7 @@ import (
 
 const (
 	provider     = "openrouter"
-	version      = "0.2.1"
+	version      = "0.2.2"
 	modelPrefix  = "openrouter/"
 	upstreamBase = "https://openrouter.ai/api/v1"
 )
