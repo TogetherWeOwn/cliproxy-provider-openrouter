@@ -179,10 +179,10 @@ One `OpenRouter` group holds short-labelled bars with no descriptions:
 
 | Bucket | Remaining fraction | Reset |
 |---|---|---|
-| `<Daily\|Weekly\|Monthly\|Lifetime> key limit` (or `Key limit` when the reset window is unknown) | `limit_remaining / limit`, clamped to 0-1 | `budgets[scope=key_limit].resets_at` when plausible, else the UTC calendar rule; none for lifetime/unknown |
+| `daily` / `weekly` / `monthly` / `lifetime` key-limit id (or `Key limit` when the reset window is unknown) | `limit_remaining / limit`, clamped to 0-1 | `budgets[scope=key_limit].resets_at` when plausible, else the UTC calendar rule; none for lifetime/unknown |
 | `Key limit unreadable` (limit present but not a number; plugin refuses requests) | 0 | none |
 | `<Daily\|Weekly\|Monthly\|Lifetime> <member guardrail\|key guardrail\|workspace\|unknown> budget`, one per `budgets[]` entry except `key_limit` | `remaining_usd / limit_usd` (or `limit_usd - spend_usd`); uncomputable stays a 0% warning bar | `resets_at`, else the calendar rule |
-| `Free-model requests today` (when the daily free-model limit is above 0) | `remaining / limit` | next 00:00 UTC |
+| `Free models` (when the daily free-model limit is above 0) | `remaining / limit` | next 00:00 UTC |
 
 A key without a limit shows no key-limit bucket at all: a 0-fraction bucket
 reads as exhausted, so the no-limit hunk omits the bucket and the card keeps
@@ -201,8 +201,10 @@ At most three chips, none repeating a bar:
 | Key | Source |
 |---|---|
 | `account_balance_usd` (`Balance`) | `total_credits - total_usage`, format `currency` USD |
-| `lifetime_spent_usd` (`Lifetime spent`) | `total_usage`, format `currency` USD |
 | `key_expires_in_days` (`Key expires in`) | whole days from `expires_at - now`, minimum 1 while unexpired and 0 once elapsed, so an expired cached reading keeps its indicator instead of reading as no expiry |
+
+Lifetime spend stays off the card: it repeats the lifetime bar's subject,
+and the full history remains in the OpenRouter dashboard.
 
 A metric is emitted only when its source is a finite number; fields of the
 wrong JSON type read as absent. The subscription tier is `KEY LIMIT UNREADABLE`,
