@@ -59,8 +59,8 @@ func TestLiveQuotaCard(t *testing.T) {
 	balance := liveBalance()
 	wantGroups := []pluginapi.QuotaGroup{
 		{DisplayName: "OpenRouter", Buckets: []pluginapi.QuotaBucket{
-			{Window: "Weekly key limit", RemainingFraction: 1, ResetTime: "2026-11-02T00:00:00Z"},
-			{Window: "Free-model requests today", RemainingFraction: 1, ResetTime: "2026-11-02T00:00:00Z"},
+			{Window: "weekly", RemainingFraction: 1, ResetTime: "2026-11-02T00:00:00Z"},
+			{Window: "Free models", RemainingFraction: 1, ResetTime: "2026-11-02T00:00:00Z"},
 		}},
 	}
 	if !reflect.DeepEqual(out.Groups, wantGroups) {
@@ -70,7 +70,7 @@ func TestLiveQuotaCard(t *testing.T) {
 	for _, m := range out.Summary {
 		metrics[m.Key] = m.Value
 	}
-	wantMetrics := map[string]float64{"account_balance_usd": balance, "lifetime_spent_usd": 237.537304708}
+	wantMetrics := map[string]float64{"account_balance_usd": balance}
 	if !reflect.DeepEqual(metrics, wantMetrics) {
 		t.Fatalf("metrics %v", metrics)
 	}

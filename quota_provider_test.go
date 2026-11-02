@@ -192,7 +192,7 @@ func TestQuotaProviderCredits(t *testing.T) {
 			if err != nil || len(out.Groups) != 1 || out.Groups[0].DisplayName != "OpenRouter" || h.srv.creditCalls.Load() != 1 {
 				t.Fatalf("%+v %v", out, err)
 			}
-			var balance, spent *float64
+			var balance *float64
 			for _, m := range out.Summary {
 				switch m.Key {
 				case "account_balance_usd":
@@ -201,17 +201,14 @@ func TestQuotaProviderCredits(t *testing.T) {
 						t.Fatalf("balance chip: %+v", m)
 					}
 				case "lifetime_spent_usd":
-					spent = &m.Value
-					if m.Label != "Lifetime spent" || m.Format != "currency" || m.Currency != "USD" {
-						t.Fatalf("lifetime chip: %+v", m)
-					}
+					t.Fatalf("lifetime chip must stay off the card: %+v", m)
 				}
 			}
-			if tc.wantBalance && (balance == nil || spent == nil) {
-				t.Fatalf("balance chips missing: %+v", out.Summary)
+			if tc.wantBalance && balance == nil {
+				t.Fatalf("balance chip missing: %+v", out.Summary)
 			}
-			if !tc.wantBalance && (balance != nil || spent != nil) {
-				t.Fatalf("balance chips present without credits: %+v", out.Summary)
+			if !tc.wantBalance && balance != nil {
+				t.Fatalf("balance chip present without credits: %+v", out.Summary)
 			}
 			if violations := kit.CheckCard(out); len(violations) != 0 {
 				t.Fatalf("CheckCard violations: %v", violations)
@@ -299,7 +296,7 @@ func TestQuotaProviderCacheSingleFlightAndErrors(t *testing.T) {
 	// Errors are never cached.
 	h.srv.set(fixture(t, "key_weekly_limit.json"), 200)
 	out, err := h.quota.FetchQuota(context.Background(), quotaRequest(""))
-	if err != nil || h.srv.keyCalls.Load() != 3 || out.Groups[0].Buckets[0].Window != "Weekly key limit" {
+	if err != nil || h.srv.keyCalls.Load() != 3 || out.Groups[0].Buckets[0].Window != "weekly" {
 		t.Fatalf("%+v %v calls=%d", out, err, h.srv.keyCalls.Load())
 	}
 }

@@ -8,7 +8,7 @@
       "displayName": "OpenRouter",
       "buckets": [
         {
-          "window": "Lifetime key limit",
+          "window": "lifetime",
           "remainingFraction": 0.6
         }
       ]

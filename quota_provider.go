@@ -54,17 +54,20 @@ func resetText(server *time.Time, w window, now time.Time) string {
 
 var scopeLabels = map[string]string{"member": "member guardrail", "workspace_default_member": "member guardrail", "api_key": "key guardrail", "workspace_default_key": "key guardrail", "workspace": "workspace"}
 
-// keyLimitWindow is the short row label for the key-limit bar.
+// keyLimitWindow is the window id for the key-limit bar: the canonical ids
+// the panel resolves to a countdown timeline and stable order. The free-model
+// and budget rows keep their own short labels so same-interval rows never
+// share a name.
 func keyLimitWindow(w window) string {
 	switch w {
 	case windowDaily:
-		return "Daily key limit"
+		return "daily"
 	case windowWeekly:
-		return "Weekly key limit"
+		return "weekly"
 	case windowMonthly:
-		return "Monthly key limit"
+		return "monthly"
 	case windowLifetime:
-		return "Lifetime key limit"
+		return "lifetime"
 	default:
 		return "Key limit"
 	}
@@ -139,10 +142,11 @@ func expiryChip(expires time.Time, now time.Time) pluginapi.QuotaMetric {
 
 // normalizeQuota builds the single-group card: the key-limit bar, the
 // free-model daily bar, and one bar per non-key_limit budget when present.
-// Summary chips are the account balance and lifetime spend (USD currency,
-// formatted panel-side with 2 decimals) plus the expiry chip when the key
-// has an expiry. Usage counters, BYOK splits, the spend reserve, and
-// purchased-credit totals stay off the card.
+// Summary chips are the account balance (USD currency, formatted panel-side
+// with 2 decimals) plus the expiry chip when the key has an expiry. Lifetime
+// spend repeats the lifetime bar's subject and stays off the card; usage
+// counters, BYOK splits, the spend reserve, and purchased-credit totals do
+// too.
 func normalizeQuota(r keyReading, _ credentials, now time.Time) pluginapi.QuotaFetchResponse {
 	out := pluginapi.QuotaFetchResponse{Subscription: &pluginapi.QuotaSubscription{Plan: "OpenRouter", TierName: "paid credits"}}
 	switch {
@@ -159,7 +163,7 @@ func normalizeQuota(r keyReading, _ credentials, now time.Time) pluginapi.QuotaF
 	}
 	if r.Free != nil && r.Free.Limit > 0 {
 		bars = append(bars, pluginapi.QuotaBucket{
-			Window: "Free-model requests today", RemainingFraction: fraction(float64(r.Free.Remaining), float64(r.Free.Limit)), ResetTime: nextUTCDay(now).Format(time.RFC3339),
+			Window: "Free models", RemainingFraction: fraction(float64(r.Free.Remaining), float64(r.Free.Limit)), ResetTime: nextUTCDay(now).Format(time.RFC3339),
 		})
 	}
 	for _, b := range r.Budgets {
@@ -171,7 +175,6 @@ func normalizeQuota(r keyReading, _ credentials, now time.Time) pluginapi.QuotaF
 	if r.Account != nil {
 		out.Summary = append(out.Summary,
 			pluginapi.QuotaMetric{Key: "account_balance_usd", Label: "Balance", Value: r.Account.balance(), Format: "currency", Currency: "USD"},
-			pluginapi.QuotaMetric{Key: "lifetime_spent_usd", Label: "Lifetime spent", Value: r.Account.Usage, Format: "currency", Currency: "USD"},
 		)
 	}
 	if r.ExpiresAt != nil {

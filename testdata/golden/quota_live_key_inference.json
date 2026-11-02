@@ -10,13 +10,6 @@
       "value": 7.4626952920000065,
       "format": "currency",
       "currency": "USD"
-    },
-    {
-      "key": "lifetime_spent_usd",
-      "label": "Lifetime spent",
-      "value": 237.537304708,
-      "format": "currency",
-      "currency": "USD"
     }
   ],
   "groups": [
@@ -24,12 +17,12 @@
       "displayName": "OpenRouter",
       "buckets": [
         {
-          "window": "Weekly key limit",
+          "window": "weekly",
           "remainingFraction": 1,
           "resetTime": "2026-11-02T00:00:00Z"
         },
         {
-          "window": "Free-model requests today",
+          "window": "Free models",
           "remainingFraction": 1,
           "resetTime": "2026-11-02T00:00:00Z"
         }
