@@ -8,12 +8,12 @@
       "displayName": "OpenRouter",
       "buckets": [
         {
-          "window": "Monthly key limit",
+          "window": "monthly",
           "remainingFraction": 0.42,
           "resetTime": "2026-12-01T00:00:00Z"
         },
         {
-          "window": "Free-model requests today",
+          "window": "Free models",
           "remainingFraction": 0.997,
           "resetTime": "2026-11-05T00:00:00Z"
         }

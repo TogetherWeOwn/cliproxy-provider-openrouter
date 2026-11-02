@@ -8,7 +8,7 @@
       "displayName": "OpenRouter",
       "buckets": [
         {
-          "window": "Monthly key limit",
+          "window": "monthly",
           "remainingFraction": 0,
           "resetTime": "2026-12-01T00:00:00Z"
         }

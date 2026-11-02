@@ -10,7 +10,7 @@ import (
 
 const (
 	provider     = "openrouter"
-	version      = "0.2.2"
+	version      = "0.2.3"
 	modelPrefix  = "openrouter/"
 	upstreamBase = "https://openrouter.ai/api/v1"
 )
@@ -38,7 +38,7 @@ func makePlugin(host kit.Caller) (*kit.Runtime, error) {
 	}
 	auth.oauth = oauth
 	return kit.New(kit.Definition{
-		Metadata:       pluginapi.Metadata{Name: provider, Version: version, Author: "TogetherWeOwn", GitHubRepository: "https://github.com/TogetherWeOwn/cliproxy-provider-openrouter"},
+		Metadata:       pluginapi.Metadata{Name: provider, Version: version, Author: "TogetherWeOwn", GitHubRepository: "https://github.com/TogetherWeOwn/cliproxy-provider-openrouter", Logo: "https://www.google.com/s2/favicons?domain=openrouter.ai"},
 		ModelNamespace: provider,
 		Configure:      configureBase,
 		// The PKCE login keeps no management routes: the panel's standard
