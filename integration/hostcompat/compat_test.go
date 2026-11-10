@@ -41,7 +41,7 @@ import (
 
 const (
 	provider = "openrouter"
-	version  = "0.2.3"
+	version  = "0.3.0"
 	modelA   = "openrouter/anthropic/claude-sonnet-4.5"
 	modelB   = "openrouter/free"
 )

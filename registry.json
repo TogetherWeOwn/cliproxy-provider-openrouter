@@ -7,7 +7,7 @@
       "description": "API-key authentication, openrouter/-prefixed OpenAI chat models, a fail-closed key credit-limit guard and read-only OpenRouter credit and budget quota cards",
       "author": "TogetherWeOwn",
       "repository": "https://github.com/TogetherWeOwn/cliproxy-provider-openrouter",
-      "version": "0.2.3",
+      "version": "0.3.0",
       "license": "MIT",
       "tags": ["provider", "openrouter", "quota", "openai-compatible"],
       "install": {"type": "github-release"}
