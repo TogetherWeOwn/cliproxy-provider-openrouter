@@ -236,7 +236,7 @@ func TestModelsForAuthLastGoodSurvivesFailure(t *testing.T) {
 	// An oversized refresh is likewise a failed fetch, not a replacement.
 	host.mu.Lock()
 	host.status = 0
-	host.body = []byte(`{"data":[],"pad":"` + strings.Repeat("x", kit.MaxModelsBody) + `"}`)
+	host.body = []byte(`{"data":[],"pad":"` + strings.Repeat("x", maxModelsBody) + `"}`)
 	host.mu.Unlock()
 	out, err = cat.ModelsForAuth(context.Background(), modelRequest(host))
 	if err != nil {
@@ -283,7 +283,7 @@ func TestModelsForAuthErrors(t *testing.T) {
 		{&fakeHost{body: fixture(t, "models_not_json.txt")}, "invalid_models"},
 		{&fakeHost{body: []byte(`{"object":"list"}`)}, "invalid_models"},
 		{&fakeHost{status: 401, body: fixture(t, "models_401.json")}, "invalid_credentials"},
-		{&fakeHost{body: []byte(`{"data":[],"pad":"` + strings.Repeat("x", kit.MaxModelsBody) + `"}`)}, "invalid_models"},
+		{&fakeHost{body: []byte(`{"data":[],"pad":"` + strings.Repeat("x", maxModelsBody) + `"}`)}, "invalid_models"},
 	} {
 		_, err := cat.ModelsForAuth(context.Background(), modelRequest(tc.host))
 		if e := rpcErr(t, err); e.Code != tc.code || strings.Contains(e.Message, exampleKey) {
@@ -297,6 +297,24 @@ func TestModelsForAuthErrors(t *testing.T) {
 	// no last-good and no static, the fetch error surfaces.
 	if _, err := cat.ModelsForAuth(context.Background(), modelRequest(&fakeHost{body: []byte(`{"data":[]}`)})); rpcErr(t, err).Code != "models_fetch_failed" {
 		t.Fatalf("empty upstream err %v, want models_fetch_failed", err)
+	}
+}
+
+// The Fetch's parse cap is plugin-local (16 MiB). A catalog larger than
+// the kit's 1 MiB OpenAIModelsFetcher cap must still be served: that cap
+// bounds only the kit fetcher, never this custom Fetch.
+func TestModelsForAuthLargeCatalogServed(t *testing.T) {
+	cat := newTestCatalog(newClock(now0))
+	body := []byte(`{"data":[{"id":"acme/big","name":"acme/big","pricing":{"prompt":"0","completion":"0"}}],"pad":"` + strings.Repeat("x", 2<<20) + `"}`)
+	if len(body) <= kit.MaxModelsBody || len(body) > maxModelsBody {
+		t.Fatalf("fixture body %d bytes outside (1 MiB, 16 MiB]", len(body))
+	}
+	out, err := cat.ModelsForAuth(context.Background(), modelRequest(&fakeHost{body: body}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Models) != 1 || out.Models[0].ID != "openrouter/acme/big" {
+		t.Fatalf("served %+v, want the model from a catalog above the kit cap", out.Models)
 	}
 }
 

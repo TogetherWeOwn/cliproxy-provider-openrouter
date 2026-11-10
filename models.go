@@ -19,6 +19,12 @@ const (
 	maxModelID       = 128
 	maxDescription   = 300
 	displayNameAffix = " via OpenRouter"
+	// maxModelsBody bounds the Fetch's discovery response parse. It is a
+	// plugin-local cap: the kit's MaxModelsBody applies only to
+	// OpenAIModelsFetcher, not to this custom Fetch, so the kit cap must
+	// not be reused here. 16 MiB restores the pre-migration cap — the
+	// full OpenRouter catalog is verbose and grows with each model added.
+	maxModelsBody = 16 << 20
 )
 
 // One "/" after an optional "~" alias marker; variant suffixes such as
@@ -113,7 +119,7 @@ func (cat *catalog) fetch(ctx context.Context, r pluginapi.AuthModelRequest) ([]
 		e, _ := classifyFailure(resp, cat.now(), nil, "")
 		return nil, e
 	}
-	if len(resp.Body) > kit.MaxModelsBody {
+	if len(resp.Body) > maxModelsBody {
 		return nil, invalidModels()
 	}
 	return parseModels(resp.Body, cat.now())

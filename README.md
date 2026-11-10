@@ -142,8 +142,8 @@ the plugin is non-catalog in the host, so new upstream models appear only on
 host events (plugin registration, config reload, auth upsert/post-update, or a
 catalog callback for another provider's section) — never by polling. Every
 invocation attempts a fresh foreground fetch (bounded by the kit's 15-second
-deadline, 1 MiB post-return parse cap); there is no background refresh and no
-retry. A failed fetch serves the durable last-good list for that credential
+deadline and the plugin's 16 MiB post-return parse cap); there is no
+background refresh and no retry. A failed fetch serves the durable last-good list for that credential
 generation, never a stale one after a credential rotation; when nothing is
 available, the fetch error surfaces. New OpenRouter models therefore appear
 after an auth or plugin reload.
