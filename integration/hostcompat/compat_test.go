@@ -344,11 +344,12 @@ func TestRealHostLoader(t *testing.T) {
 	if !found.Handled || strings.Join(ids, ",") != "openrouter/anthropic/claude-sonnet-4.5,openrouter/free,openrouter/~anthropic/claude-sonnet-latest" {
 		t.Fatalf("discovery %v", ids)
 	}
-	// (9) Re-discovery is host-driven: a second call within 10 minutes is
-	// served from the plugin cache. The pinned host re-runs ModelsForAuth on
-	// auth (re)registration and plugin reload only (docs/SOURCES.md).
+	// (9) Re-discovery is host-driven: the pinned host re-runs ModelsForAuth
+	// on auth (re)registration and plugin reload only (docs/SOURCES.md), and
+	// the kit catalog fetches on every invocation — there is no TTL skip
+	// gate, so a second call fetches again.
 	_ = host.ModelsForAuth(ctx, auth)
-	if up.models.Load() != 1 {
+	if up.models.Load() != 2 {
 		t.Fatalf("catalog fetched %d times", up.models.Load())
 	}
 	t.Run("auth prefix adds prefix/openrouter/ IDs, never bare vendor IDs", func(t *testing.T) {

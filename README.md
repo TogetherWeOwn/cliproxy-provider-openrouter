@@ -137,10 +137,16 @@ An entry is not registered when:
 
 Routing suffixes that are not catalog entries (`:nitro`, `:floor`, `:exacto`,
 `:online`) are not registered. Static registration is empty; the catalog comes
-only from discovery. The pinned host re-runs discovery when an auth is
-(re)registered and when the plugin is reloaded, not on a timer; the plugin caches
-each auth's catalog for 10 minutes. New OpenRouter models therefore appear after
-an auth or plugin reload.
+only from discovery. Discovery is served by the kit `ModelCatalog` (v0.5.0):
+the plugin is non-catalog in the host, so new upstream models appear only on
+host events (plugin registration, config reload, auth upsert/post-update, or a
+catalog callback for another provider's section) — never by polling. Every
+invocation attempts a fresh foreground fetch (bounded by the kit's 15-second
+deadline, 1 MiB post-return parse cap); there is no background refresh and no
+retry. A failed fetch serves the durable last-good list for that credential
+generation, never a stale one after a credential rotation; when nothing is
+available, the fetch error surfaces. New OpenRouter models therefore appear
+after an auth or plugin reload.
 
 Execution is OpenAI chat only (`POST /api/v1/chat/completions`). Messages and
 Responses clients go through the host's translation from chat (OpenRouter's
