@@ -2,7 +2,7 @@
 // its import namespace; it consumes the original pinned module without a fork.
 module github.com/router-for-me/CLIProxyAPI/v8/openroutercompat
 
-go 1.26.10
+go 1.26.11
 
 require (
 	github.com/klauspost/compress v1.18.7

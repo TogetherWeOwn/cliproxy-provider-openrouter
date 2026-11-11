@@ -1,6 +1,6 @@
 module github.com/TogetherWeOwn/cliproxy-provider-openrouter
 
-go 1.26.10
+go 1.26.11
 
 require (
 	github.com/TogetherWeOwn/cliproxy-provider-kit v0.5.0
