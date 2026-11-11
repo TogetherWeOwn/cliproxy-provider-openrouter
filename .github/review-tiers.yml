@@ -1,0 +1,59 @@
+# Review tier is the highest tier of every changed path; sensitive wins
+# overlaps and unmatched paths default to sensitive. New paths stay sensitive
+# until classified. This map is always sensitive.
+#
+# Content triggers override every path: new/changed public endpoints or input
+# parsing; auth/authz/session; crypto/keys; secrets/credentials; permission
+# checks; tenant isolation/personal data; SQL/schema/migrations; dependencies
+# or lockfiles (including dev dependencies); CI/workflows; weakened assertions,
+# deleted tests/snapshots, or lowered test gates. Low tests, if ever added, are
+# additive-only and never exempt from these triggers.
+#
+# Every change gets QA; sensitive, unclassified, triggered or QA-escalated
+# changes get Security -> QA. Sensitive-floor downgrades require Security
+# approval. The author's risk_tier attestation is verified by QA.
+version: 1
+default_tier: sensitive
+
+tiers:
+  # Exact prose files only; security-relevant content still escalates above.
+  low:
+    - README.md
+    - LICENSE
+
+  # No runtime module has been audited as free of trust-boundary effects.
+  ordinary: []
+
+  sensitive:
+    # Review policy, ownership, workflows and automation configuration.
+    - .github/**
+    - CODEOWNERS
+    - "**/CODEOWNERS"
+    - "**/rulesets/**"
+    # Dependencies, builds, packaging and release tooling.
+    - go.mod
+    - go.sum
+    - "**/go.mod"
+    - "**/go.sum"
+    - Makefile
+    - "**/Makefile"
+    - Dockerfile
+    - "**/Dockerfile*"
+    - scripts/**
+    - registry.json
+    # Agent instructions and tool permissions, including nested locations.
+    - AGENTS.md
+    - CLAUDE.md
+    - SKILL.md
+    - .claude/**
+    - skills/**
+    - "**/AGENTS.md"
+    - "**/CLAUDE.md"
+    - "**/SKILL.md"
+    - "**/.claude/**"
+    - "**/skills/**"
+    # Provider runtime crosses auth, parsing, network and credential boundaries.
+    # Tests and fixtures also exercise those boundaries and remain sensitive.
+    - "*.go"
+    - integration/**
+    - testdata/**
