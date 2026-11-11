@@ -16,9 +16,8 @@ version: 1
 default_tier: sensitive
 
 tiers:
-  # Exact prose files only; security-relevant content still escalates above.
+  # The README contains operational commands and remains sensitive by default.
   low:
-    - README.md
     - LICENSE
 
   # No runtime module has been audited as free of trust-boundary effects.
