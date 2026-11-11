@@ -110,7 +110,7 @@ func (g *guard) admit(ctx context.Context, authID string, c credentials, storage
 		}
 		// A latch for an account-wide kind is the same upstream exhaustion
 		// classifyFailure scoped: keep the pair so the host cools the whole
-		// credential, not just this model. The ":free" latch stays scoped.
+		// credential, not just this model. The ":free" latch stays model-scoped.
 		if kind.accountWide() {
 			return quotaExhaustedScoped(message, retrySeconds(until, now))
 		}

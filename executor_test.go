@@ -162,9 +162,15 @@ func TestStreamCredentialScopeSurfacesThroughKitRuntime(t *testing.T) {
 	if e := rpcErr(t, err); !e.CredentialScoped || e.Code != "quota_exhausted" || e.HTTPStatus != 429 || e.RetryAfterSeconds != secondsUntil("2026-11-05T00:00:00Z") {
 		t.Fatalf("scoped stream: %+v", e)
 	}
-	h2 := newHarness(t, fixture(t, "key_free_tier.json"))
+	// key_free_paid.json passes guard admission (free requests left), so
+	// this proves the upstream classifier, not the guard refusal, returns
+	// the unscoped free-quota error.
+	h2 := newHarness(t, fixture(t, "key_free_paid.json"))
 	host2 := &fakeHost{status: 429, chunks: [][]byte{fixture(t, "err_429_free.json")}}
 	_, err = h2.exec.ExecuteStream(context.Background(), execRequest(host2, `{"model":"openrouter/vendor/model:free"}`))
+	if n := len(host2.calls()); n != 1 {
+		t.Fatalf("free stream must reach upstream exactly once, calls %d", n)
+	}
 	if e := rpcErr(t, err); e.CredentialScoped || e.Code != "quota_exhausted" || e.HTTPStatus != 429 {
 		t.Fatalf("free stream must stay unscoped: %+v", e)
 	}
