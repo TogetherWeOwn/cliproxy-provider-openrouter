@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	kit "github.com/TogetherWeOwn/cliproxy-provider-kit"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 )
 
@@ -130,10 +131,12 @@ func TestMidStreamErrorIsRelayedRaw(t *testing.T) {
 		}
 		got = append(got, c.Payload)
 	}
-	// Each event keeps its data unchanged, framed for the host translator.
+	// Each event keeps its data unchanged, framed for the host translator
+	// as one complete `data:` SSE event (kit v0.6.0 contract; this request
+	// carries no request_path, so it takes the framed route).
 	var want [][]byte
 	for _, frame := range bytes.Split(bytes.TrimSpace(sse), []byte("\n\n")) {
-		want = append(want, frame)
+		want = append(want, append(frame, []byte("\n\n")...))
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("mid-stream error chunk was altered: %q", got)
@@ -144,8 +147,40 @@ func TestStreamFailureIsClassified(t *testing.T) {
 	h := newHarness(t, fixture(t, "key_monthly_limit.json"))
 	host := &fakeHost{status: 403, chunks: [][]byte{fixture(t, "err_403_key_limit.json")}}
 	_, err := h.exec.ExecuteStream(context.Background(), execRequest(host, `{"model":"openrouter/a/b"}`))
-	if e := rpcErr(t, err); e.Code != "quota_exhausted" || e.HTTPStatus != 429 || e.RetryAfterSeconds != secondsUntil("2026-11-05T00:00:00Z") {
+	if e := rpcErr(t, err); e.Code != "quota_exhausted" || e.HTTPStatus != 429 || e.RetryAfterSeconds != secondsUntil("2026-11-05T00:00:00Z") || !e.CredentialScoped {
 		t.Fatalf("%+v", e)
+	}
+}
+
+// The scoped pair survives the kit runtime: a stream error event for the
+// account-wide shape surfaces credential-scoped through ExecuteStream, the
+// ":free" shape stays model-scoped.
+func TestStreamCredentialScopeSurfacesThroughKitRuntime(t *testing.T) {
+	h := newHarness(t, fixture(t, "key_free_tier.json"))
+	host := &fakeHost{status: 403, chunks: [][]byte{fixture(t, "err_403_key_limit.json")}}
+	_, err := h.exec.ExecuteStream(context.Background(), execRequest(host, `{"model":"openrouter/a/b"}`))
+	if e := rpcErr(t, err); !e.CredentialScoped || e.Code != "quota_exhausted" || e.HTTPStatus != 429 || e.RetryAfterSeconds != secondsUntil("2026-11-05T00:00:00Z") {
+		t.Fatalf("scoped stream: %+v", e)
+	}
+	h2 := newHarness(t, fixture(t, "key_free_tier.json"))
+	host2 := &fakeHost{status: 429, chunks: [][]byte{fixture(t, "err_429_free.json")}}
+	_, err = h2.exec.ExecuteStream(context.Background(), execRequest(host2, `{"model":"openrouter/vendor/model:free"}`))
+	if e := rpcErr(t, err); e.CredentialScoped || e.Code != "quota_exhausted" || e.HTTPStatus != 429 {
+		t.Fatalf("free stream must stay unscoped: %+v", e)
+	}
+}
+
+// The kit passes a classified *pluginabi.Error through, so the credential
+// scope set in classifyFailure reaches the host untouched.
+func TestMapErrorKeepsCredentialScope(t *testing.T) {
+	e, _ := classifyFailure(pluginapi.HTTPResponse{StatusCode: 403, Body: fixture(t, "err_403_key_limit.json")}, now0, nil, "a/b")
+	mapped := kit.MapError(e)
+	if !mapped.CredentialScoped || mapped.Code != "quota_exhausted" || mapped.HTTPStatus != 429 || mapped.RetryAfterSeconds != secondsUntil("2026-11-05T00:00:00Z") || mapped.Message != e.Message {
+		t.Fatalf("%+v -> %+v", e, mapped)
+	}
+	f, _ := classifyFailure(pluginapi.HTTPResponse{StatusCode: 429, Body: fixture(t, "err_429_free.json")}, now0, nil, "vendor/model:free")
+	if kit.MapError(f).CredentialScoped {
+		t.Fatalf("free error must stay unscoped: %+v", f)
 	}
 }
 

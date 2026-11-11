@@ -41,7 +41,7 @@ import (
 
 const (
 	provider = "openrouter"
-	version  = "0.3.0"
+	version  = "0.3.1"
 	modelA   = "openrouter/anthropic/claude-sonnet-4.5"
 	modelB   = "openrouter/free"
 )
@@ -237,7 +237,7 @@ func statusOf(err error) int {
 	return 0
 }
 
-// The actual v8.0.49 loader performs dlopen, C-ABI registration, RPC dispatch,
+// The actual v8.0.63 loader performs dlopen, C-ABI registration, RPC dispatch,
 // persistence and executor adapters. Only the upstream is an httptest mock.
 func TestRealHostLoader(t *testing.T) {
 	up := &upstream{t: t, chats: map[string]int{}, gate: make(chan struct{}), resetAt: time.Now().UTC().Add(2 * time.Hour).Truncate(time.Second)}
@@ -408,9 +408,10 @@ func TestRealHostLoader(t *testing.T) {
 			}
 			chunks = append(chunks, string(c.Payload))
 		}
-		// One event per chunk; the comment and [DONE] are dropped. With no
-		// inbound route recorded, events keep their "data:" framing.
-		if len(chunks) != 2 || !strings.HasPrefix(chunks[0], `data: {"id":"gen-example"`) || !strings.Contains(chunks[1], `"content":"lo"`) || strings.Contains(strings.Join(chunks, ""), "[DONE]") {
+		// One event per chunk; the comment and [DONE] are dropped. The v8.0.63
+		// host adapter records the OpenAI chat route, so events are bare JSON
+		// (the OpenAI handler adds its own "data:" framing).
+		if len(chunks) != 2 || !strings.HasPrefix(chunks[0], `{"id":"gen-example"`) || !strings.Contains(chunks[1], `"content":"lo"`) || strings.Contains(strings.Join(chunks, ""), "[DONE]") {
 			t.Fatalf("stream %q", chunks)
 		}
 	})
@@ -542,15 +543,19 @@ func TestRealHostLoader(t *testing.T) {
 		if _, err = mgr.Execute(ctx, []string{provider}, call(modelA, ""), opts); err == nil || up.chatCount("limited-key") != 1 {
 			t.Fatalf("dispatched during cooldown: %v calls=%d", err, up.chatCount("limited-key"))
 		}
-		// (3) A different model on the same auth is refused by the guard with
-		// zero upstream calls, and cools until the same reset.
+		// (3) The 429 was credential-scoped, so the host cools the whole
+		// credential until the reset: a different model is refused with zero
+		// upstream calls and the plugin is never dispatched to again.
 		_, err = mgr.Execute(ctx, []string{provider}, call(modelB, ""), opts)
 		if statusOf(err) != 429 || up.chatCount("limited-key") != 1 {
-			t.Fatalf("guard did not refuse the other model: %v calls=%d", err, up.chatCount("limited-key"))
+			t.Fatalf("credential cooldown did not refuse the other model: %v calls=%d", err, up.chatCount("limited-key"))
 		}
 		got, _ = mgr.GetByID(limited.ID)
-		if !near(got.ModelStates[modelB]) {
-			t.Fatalf("guard refusal lost the reset: %+v", got.ModelStates[modelB])
+		if !got.Quota.Exceeded || got.Quota.Reason != "credential_quota" || got.Quota.NextRecoverAt.Before(up.resetAt.Add(-3*time.Second)) || got.Quota.NextRecoverAt.After(up.resetAt.Add(3*time.Second)) {
+			t.Fatalf("whole-credential cooldown lost the reset: %+v", got.Quota)
+		}
+		if got.ModelStates[modelB] != nil {
+			t.Fatalf("host dispatched the plugin during the credential cooldown: %+v", got.ModelStates[modelB])
 		}
 	})
 
@@ -563,15 +568,18 @@ func TestRealHostLoader(t *testing.T) {
 			t.Fatalf("exhaustion %v calls=%d", err, up.chatCount("lagging-key"))
 		}
 		// GET /key still reports headroom, yet modelB is refused with no
-		// upstream call and cools until the same reset.
+		// upstream call: the credential-scoped 429 cools the whole credential
+		// until the reset without waiting for the guard's latch.
 		_, err := mgr.Execute(ctx, []string{provider}, call(modelB, ""), opts)
 		if statusOf(err) != 429 || up.chatCount("lagging-key") != 1 {
-			t.Fatalf("latch did not refuse the other model: %v calls=%d", err, up.chatCount("lagging-key"))
+			t.Fatalf("credential cooldown did not refuse the other model: %v calls=%d", err, up.chatCount("lagging-key"))
 		}
 		got, _ := mgr.GetByID(lagging.ID)
-		state := got.ModelStates[modelB]
-		if state == nil || !state.Quota.Exceeded || state.NextRetryAfter.Before(up.resetAt.Add(-3*time.Second)) || state.NextRetryAfter.After(up.resetAt.Add(3*time.Second)) {
-			t.Fatalf("latch refusal lost the reset: %+v", state)
+		if !got.Quota.Exceeded || got.Quota.Reason != "credential_quota" || got.Quota.NextRecoverAt.Before(up.resetAt.Add(-3*time.Second)) || got.Quota.NextRecoverAt.After(up.resetAt.Add(3*time.Second)) {
+			t.Fatalf("credential cooldown lost the reset: %+v", got.Quota)
+		}
+		if got.ModelStates[modelB] != nil {
+			t.Fatalf("host dispatched the plugin during the credential cooldown: %+v", got.ModelStates[modelB])
 		}
 	})
 

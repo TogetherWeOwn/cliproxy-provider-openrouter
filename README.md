@@ -3,8 +3,8 @@
 A [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) provider plugin for
 [OpenRouter](https://openrouter.ai). It is built on
 [cliproxy-provider-kit](https://github.com/TogetherWeOwn/cliproxy-provider-kit)
-(pinned at `88850ce`), targets CLIProxyAPI **v8.0.49** (plugin RPC schema 10),
-and is tested against the real v8.0.49 plugin loader. It adds no scheduler, no
+(pinned at `c860882`), targets CLIProxyAPI **v8.0.63** (plugin RPC schema 10),
+and is tested against the real v8.0.63 plugin loader. It adds no scheduler, no
 background poller and no host configuration.
 
 What it does:
@@ -75,7 +75,7 @@ with a message naming it: the plugin uses only the regular key. An `id` field
 is rejected (the auth ID is
 `openrouter:` plus 12 hex characters of the key's SHA-256). Unknown fields are
 rejected, so a typo such as `min_remaining` cannot silently drop the reserve;
-the host-owned fields CLIProxyAPI v8.0.49 itself writes into auth files (`note`,
+the host-owned fields CLIProxyAPI v8.0.63 itself writes into auth files (`note`,
 `headers`, `request_retry`, `disable_cooling`, `excluded_models`,
 `excluded_models_hash`, `websockets`) are accepted and ignored. The same key in
 two files is rejected as `duplicate_auth` (only SHA-256 digests are kept). When
@@ -137,7 +137,7 @@ An entry is not registered when:
 
 Routing suffixes that are not catalog entries (`:nitro`, `:floor`, `:exacto`,
 `:online`) are not registered. Static registration is empty; the catalog comes
-only from discovery. Discovery is served by the kit `ModelCatalog` (v0.5.0):
+only from discovery. Discovery is served by the kit `ModelCatalog` (v0.6.0):
 the plugin is non-catalog in the host, so new upstream models appear only on
 host events (plugin registration, config reload, auth upsert/post-update, or a
 catalog callback for another provider's section) — never by polling. Every
@@ -290,24 +290,30 @@ on both the Execute and the raw HTTP path.
 In the pinned host, `request_exceeds_budget` and `content_policy` cause no
 cooldown (verified by the host-compat test).
 
-## Pinned host RPC limitation
+## Pinned host RPC scope
 
-CLIProxyAPI v8.0.49 keeps only the status, message and retry hint of a plugin
-error: the plugin's error code is dropped, and there is no credential-scope or
-transient marker. 401, 402 and 403 always cool the model for a fixed 30 minutes
-and ignore any retry hint; only a 429 with a retry hint honors a real reset time.
-So a spent key limit, budget or balance is reported as **429 `quota_exhausted`
-with a retry hint until the reset**, as the Cloudflare Workers AI plugin does.
-Clients see 429 instead of OpenRouter's 402/403.
+CLIProxyAPI v8.0.63 carries a plugin error's status, message, retry hint and
+credential-scope marker. A 429 with `credential_scoped` cools the whole
+credential across all of its models until the retry hint (or the quota
+backoff). A spent key limit, budget or balance is reported as **429
+`quota_exhausted` with `credential_scoped` and a retry hint until the reset**:
+the provider code is unchanged and clients see 429 instead of OpenRouter's
+402/403. The daily free-model quota stays model-scoped (`:free` only), and
+transient and request-scoped failures (`rate_limited`, `request_exceeds_budget`,
+`content_policy`) stay unscoped. 401, 402 and 403 still cool the model for a
+fixed 30 minutes and ignore any retry hint; only a 429 honors a real reset
+time.
 
-Every plugin failure also cools only one (auth, model) pair. The guard's latch
-makes up for that: once OpenRouter reports the key spent, each other model of
-that auth is refused locally once, with no upstream call, and then cools until
-the same reset, even while the lagging `/key` counters still show headroom.
+Guard refusals surface through the same `quota_exhausted` 429 shape, so the
+host treats them identically: a guard refusal for an account-wide cap (the
+spend-guard layers and the account-wide latches) also carries
+`credential_scoped`, and a `:free` refusal stays model-scoped. `quota_unverified`
+and `key_limit_required` stay unscoped.
 
-The upstream fix that would remove this: preserve the plugin error code in the
-host's `resultErrorFromError` and expose credential-scope and transient markers
-on the RPC error type.
+The guard's latch still makes up for any remaining per-model cooling: once
+OpenRouter reports the key spent, each other model of that auth is refused
+locally once, with no upstream call, and then cools until the same reset,
+even while the lagging `/key` counters still show headroom.
 
 ## Mid-stream errors
 
