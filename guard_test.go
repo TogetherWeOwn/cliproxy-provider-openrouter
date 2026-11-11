@@ -32,23 +32,24 @@ func TestGuardRules(t *testing.T) {
 		code    string
 		retry   int
 		message string
+		scoped  bool
 	}{
-		{"G1 management key", "key_management.json", key, "a/b", 401, "invalid_credentials", 0, "management key"},
-		{"G1 legacy provisioning key", "key_provisioning_legacy.json", key, "a/b", 401, "invalid_credentials", 0, "management key"},
-		{"G2 no key limit", "key_no_limit.json", key, "a/b", 403, "key_limit_required", 0, "set a credit limit"},
-		{"G3 negative remaining waits for monthly reset", "key_exhausted_negative.json", key, "a/b", 429, "quota_exhausted", secondsUntil("2026-12-01T00:00:00Z"), "credit limit reached"},
-		{"G3 zero daily limit", "key_zero_limit.json", key, "a/b", 429, "quota_exhausted", secondsUntil("2026-11-05T00:00:00Z"), "credit limit reached"},
-		{"G3 reserve on weekly key", "key_weekly_limit.json", credentials{apiKey: exampleKey, reserve: 0.01}, "a/b", 429, "quota_exhausted", secondsUntil("2026-11-09T00:00:00Z"), "reserve reached"},
-		{"G3 lifetime limit re-checks hourly", "key_lifetime_limit.json", credentials{apiKey: exampleKey, reserve: 60}, "a/b", 429, "quota_exhausted", 3600, "reserve reached"},
-		{"G3 unknown reset re-checks hourly", "key_unknown_reset.json", credentials{apiKey: exampleKey, reserve: 5}, "a/b", 429, "quota_exhausted", 3600, "reserve reached"},
-		{"G3 effective budget binds before an unlimited key", "key_budgets_mixed.json", credentials{apiKey: exampleKey, allowUnlimited: true, reserve: 3}, "a/b", 429, "quota_exhausted", secondsUntil("2026-11-05T00:00:00Z"), "reserve reached"},
-		{"G4 free daily requests used up", "key_free_tier.json", key, "vendor/model:free", 429, "quota_exhausted", secondsUntil("2026-11-05T00:00:00Z"), "free-model requests"},
+		{"G1 management key", "key_management.json", key, "a/b", 401, "invalid_credentials", 0, "management key", false},
+		{"G1 legacy provisioning key", "key_provisioning_legacy.json", key, "a/b", 401, "invalid_credentials", 0, "management key", false},
+		{"G2 no key limit", "key_no_limit.json", key, "a/b", 403, "key_limit_required", 0, "set a credit limit", false},
+		{"G3 negative remaining waits for monthly reset", "key_exhausted_negative.json", key, "a/b", 429, "quota_exhausted", secondsUntil("2026-12-01T00:00:00Z"), "credit limit reached", true},
+		{"G3 zero daily limit", "key_zero_limit.json", key, "a/b", 429, "quota_exhausted", secondsUntil("2026-11-05T00:00:00Z"), "credit limit reached", true},
+		{"G3 reserve on weekly key", "key_weekly_limit.json", credentials{apiKey: exampleKey, reserve: 0.01}, "a/b", 429, "quota_exhausted", secondsUntil("2026-11-09T00:00:00Z"), "reserve reached", true},
+		{"G3 lifetime limit re-checks hourly", "key_lifetime_limit.json", credentials{apiKey: exampleKey, reserve: 60}, "a/b", 429, "quota_exhausted", 3600, "reserve reached", true},
+		{"G3 unknown reset re-checks hourly", "key_unknown_reset.json", credentials{apiKey: exampleKey, reserve: 5}, "a/b", 429, "quota_exhausted", 3600, "reserve reached", true},
+		{"G3 effective budget binds before an unlimited key", "key_budgets_mixed.json", credentials{apiKey: exampleKey, allowUnlimited: true, reserve: 3}, "a/b", 429, "quota_exhausted", secondsUntil("2026-11-05T00:00:00Z"), "reserve reached", true},
+		{"G4 free daily requests used up", "key_free_tier.json", key, "vendor/model:free", 429, "quota_exhausted", secondsUntil("2026-11-05T00:00:00Z"), "free-model requests", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newHarness(t, fixture(t, tc.file))
 			e := rpcErr(t, admitWith(h, tc.c, tc.model))
-			if e.HTTPStatus != tc.status || e.Code != tc.code || e.RetryAfterSeconds != tc.retry || !strings.Contains(e.Message, tc.message) || !strings.HasPrefix(e.Message, tc.code+": ") {
-				t.Fatalf("%+v", e)
+			if e.HTTPStatus != tc.status || e.Code != tc.code || e.RetryAfterSeconds != tc.retry || !strings.Contains(e.Message, tc.message) || !strings.HasPrefix(e.Message, tc.code+": ") || e.CredentialScoped != tc.scoped {
+				t.Fatalf("%+v scoped=%v want %v", e, e.CredentialScoped, tc.scoped)
 			}
 		})
 	}
@@ -121,7 +122,7 @@ func TestGuardLimitWithoutRemainingFailsClosed(t *testing.T) {
 func TestGuardFailsClosedWithoutReading(t *testing.T) {
 	h := newHarness(t, nil)
 	h.srv.set([]byte(`{"error":{"code":500}}`), 500)
-	if e := rpcErr(t, admitWith(h, credentials{apiKey: exampleKey}, "a/b")); e.Code != "quota_unverified" || e.HTTPStatus != 429 || e.RetryAfterSeconds != 60 || e.Message != "quota_unverified: OpenRouter key status could not be read" {
+	if e := rpcErr(t, admitWith(h, credentials{apiKey: exampleKey}, "a/b")); e.Code != "quota_unverified" || e.HTTPStatus != 429 || e.RetryAfterSeconds != 60 || e.CredentialScoped || e.Message != "quota_unverified: OpenRouter key status could not be read" {
 		t.Fatalf("G0: %+v", e)
 	}
 	h.srv.set(fixture(t, "key_401.json"), 401)
@@ -212,7 +213,7 @@ func TestGuardFreeModelCooldownIsPerModel(t *testing.T) {
 	h := newHarness(t, fixture(t, "key_free_tier.json"))
 	c := credentials{apiKey: exampleKey}
 	e := rpcErr(t, admitWith(h, c, "meta-llama/llama-3.3-70b-instruct:free"))
-	if e.Code != "quota_exhausted" || e.RetryAfterSeconds != secondsUntil("2026-11-05T00:00:00Z") {
+	if e.Code != "quota_exhausted" || e.RetryAfterSeconds != secondsUntil("2026-11-05T00:00:00Z") || e.CredentialScoped {
 		t.Fatalf("%+v", e)
 	}
 	if err := admitWith(h, c, "anthropic/claude-sonnet-4.5"); err != nil {

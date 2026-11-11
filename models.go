@@ -31,7 +31,7 @@ const (
 // ":free" are allowed in the model part.
 var modelIDPattern = regexp.MustCompile(`^~?[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._~:-]*$`)
 
-// catalog serves models through the kit ModelCatalog (v0.5.0).
+// catalog serves models through the kit ModelCatalog (v0.6.0).
 //
 // The kit starts no goroutine and fetches foreground-only inside ModelsForAuth:
 // every call attempts a fresh fetch (the plugin's old 10-minute TTL skip gate

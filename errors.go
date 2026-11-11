@@ -137,6 +137,17 @@ const (
 // latches reports an exhaustion that latches the auth.
 func (e effect) latches() bool { return e >= effectKeyLimit && e < effectKinds }
 
+// accountWide reports an exhaustion that spends a cap shared by every model
+// of the auth (key limit, guardrail/workspace budget, account credits or
+// another spend limit). The daily free-model quota is not account-wide: it
+// applies to ":free" models only, so scoping it would wrongly cool paid
+// models. Host v8.0.63 cools the whole credential on a 429 whose error
+// carries CredentialScoped until RetryAfterSeconds; the provider Code is
+// unchanged.
+func (e effect) accountWide() bool {
+	return e == effectKeyLimit || e == effectBudget || e == effectCredits || e == effectLimit
+}
+
 // classifyFailure maps an upstream failure to a public error (see the README
 // table) and its effect on the auth's key state. reading is the last good
 // reading, model the requested model; both may be empty.
@@ -147,7 +158,16 @@ func classifyFailure(resp pluginapi.HTTPResponse, now time.Time, reading *keyRea
 	// A known exhaustion is never shortened by a shorter Retry-After; a
 	// longer server hint wins.
 	exhausted := func(message string, retry int, kind effect) (*pluginabi.Error, effect) {
-		return quotaExhausted(message, max(retry, retryAfter)), kind
+		e := quotaExhausted(message, max(retry, retryAfter))
+		// The latch already refuses every model locally; marking the error
+		// credential-scoped stops the host routing other models into the
+		// latched credential until the reset. The flag is additive: Code,
+		// Message, 429 status and the reset-derived RetryAfterSeconds keep
+		// their exact prior shape.
+		if kind.accountWide() {
+			e.CredentialScoped = true
+		}
+		return e, kind
 	}
 	payment := status == http.StatusPaymentRequired
 	limitStatus := payment || status == http.StatusForbidden

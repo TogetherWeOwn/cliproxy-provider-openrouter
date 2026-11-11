@@ -70,6 +70,18 @@ func quotaExhausted(message string, retry int) *pluginabi.Error {
 	return &pluginabi.Error{Code: "quota_exhausted", Message: "quota_exhausted: " + message, HTTPStatus: http.StatusTooManyRequests, Retryable: true, RetryAfterSeconds: retry}
 }
 
+// quotaExhaustedScoped is quotaExhausted for an account-wide cap: the host
+// cools the whole credential until RetryAfterSeconds, so it never routes
+// another model into the spent credential. Guard refusals surface through
+// the same quotaExhausted 429 and through the kit's MapError passthrough as
+// classifyFailure errors, so the host treats the pair (429 + RetryAfter)
+// identically; only the scope extends.
+func quotaExhaustedScoped(message string, retry int) *pluginabi.Error {
+	e := quotaExhausted(message, retry)
+	e.CredentialScoped = true
+	return e
+}
+
 // admit runs before every Execute, ExecuteStream and HttpRequest dispatch.
 func (g *guard) admit(ctx context.Context, authID string, c credentials, storage []byte, metadata map[string]any, model string) error {
 	proxy, ok := g.proxy(storage, metadata)
@@ -95,6 +107,12 @@ func (g *guard) admit(ctx context.Context, authID string, c credentials, storage
 		message := "OpenRouter reported a spent limit; waiting for its reset"
 		if kind == effectFree {
 			message = "OpenRouter daily free-model requests used up"
+		}
+		// A latch for an account-wide kind is the same upstream exhaustion
+		// classifyFailure scoped: keep the pair so the host cools the whole
+		// credential, not just this model. The ":free" latch stays model-scoped.
+		if kind.accountWide() {
+			return quotaExhaustedScoped(message, retrySeconds(until, now))
 		}
 		return quotaExhausted(message, retrySeconds(until, now))
 	}
@@ -164,7 +182,10 @@ func decide(r keyReading, c credentials, model string, now time.Time) error {
 		if binding > 0 {
 			message = "OpenRouter credit reserve reached"
 		}
-		return quotaExhausted(message, retry)
+		// G3 layers are the key limit, the effective budget and the account
+		// balance: every model of the auth is refused, so the host should
+		// cool the whole credential.
+		return quotaExhaustedScoped(message, retry)
 	}
 	if strings.HasSuffix(model, ":free") && r.Free != nil && r.Free.Limit > 0 && r.Free.Remaining <= 0 {
 		return quotaExhausted("OpenRouter daily free-model requests used up", retrySeconds(nextUTCDay(now), now))

@@ -38,7 +38,7 @@ func invalidAuth(message string) *pluginabi.Error {
 }
 
 // ownFields are the plugin's fields; hostFields are owned by the host and
-// may be written into an auth file by CLIProxyAPI v8.0.49 itself (the kit
+// may be written into an auth file by CLIProxyAPI v8.0.63 itself (the kit
 // fields, plus keys the management API patches into credential metadata).
 // Any other top-level field is rejected, so a typo such as "min_remaining"
 // cannot silently drop the spend reserve.

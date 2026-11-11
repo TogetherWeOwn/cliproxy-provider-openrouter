@@ -67,11 +67,11 @@ monthly on the first at 00:00.
 4. The `endpoints[]` contract, the key shape, whether `:free` requests are
    blocked by a spent key limit, and which accounts the in-flight budget covers.
 
-## Host facts (CLIProxyAPI v8.0.49)
+## Host facts (CLIProxyAPI v8.0.63)
 
 | Fact | Source |
 |---|---|
-| A plugin RPC error keeps only code, message, status and retry hint; the code does not reach cooldown, and there is no credential-scope or transient marker | `internal/pluginhost/rpc_client.go` (`rpcError`); `sdk/cliproxy/auth/conductor_cooldown.go` (`resultErrorFromError`) |
+| A plugin RPC error carries code, message, status, retry hint and a credential-scope marker; a 429 with `credential_scoped` cools the whole credential across all models until the retry hint | `sdk/pluginabi/types.go` (`Error.CredentialScoped`, `ErrorCodeCredentialQuota`); `sdk/cliproxy/auth/conductor_cooldown.go` (`isCredentialScopedError`, reason `credential_quota`) |
 | 401/402/403 cool a model for a fixed 30 minutes; 404 uses the hint or 12 hours; 429 uses max(hint, 10 s) or exponential backoff | `sdk/cliproxy/auth/conductor_cooldown.go` (the status switch in the model-state update) |
 | A 400/404/422 whose message contains `model_not_supported` is a model-support failure | `sdk/cliproxy/auth/conductor_cooldown.go` (`isModelSupportErrorMessage`) |
 | Quota cards are display-only | `internal/api/handlers/management/plugin_quota.go` |
