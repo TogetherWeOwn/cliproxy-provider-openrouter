@@ -16,11 +16,11 @@
 #
 # REQUIRED PART: `pr-size-gate` is the deliberate exception to that
 # invariant - it FAILS pull requests too large for the automated reviewer
-# and MUST be added to this repo's ruleset required-workflows list. Ship it
-# in two steps (STANDARD.md: never require a check before its workflow
-# exists on the default branch): first merge this caller and confirm the
-# gate reports on the default branch, then add the check to the required
-# list. The gate fails closed on measurement; fork pull requests within
+# and MUST be required as the `pr-size-gate / gate` status check, not as
+# this combined workflow (which also contains advisory jobs). Ship it in
+# two steps (STANDARD.md: never require a check before its workflow exists
+# on the default branch): first merge this caller and confirm the gate
+# reports on the default branch, then require only that status check. The gate fails closed on measurement; fork pull requests within
 # the gate pass (their warning comment is best-effort), while over-gate
 # forks ERR (they cannot post the split comment or ensure the exception
 # label) - that is intentional. The gate job also runs when the
@@ -39,7 +39,7 @@ name: pr-size
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled, edited]
   pull_request_review:
     types: [submitted, dismissed]
   schedule:
@@ -47,7 +47,7 @@ on:
   workflow_dispatch:
     inputs:
       pr_number:
-        description: "Optional PR number to label and gate now (blank runs the weekly tally)"
+        description: "Optional PR to evaluate on the dispatch ref, not rerun its required head check (blank: weekly tally)"
         required: false
         type: string
 
@@ -75,8 +75,8 @@ jobs:
       exclude-extra: ""
 
   # REQUIRED: fails pull requests too large for the automated reviewer.
-  # Add this check to the ruleset's required-workflows list after it has
-  # reported on this repo's default branch (two-step ship, STANDARD.md).
+  # Require only the `pr-size-gate / gate` status after it has reported on
+  # this repo's default branch; never require this combined workflow.
   pr-size-gate:
     name: pr-size-gate
     if: github.event_name == 'pull_request' || github.event_name == 'pull_request_review' || inputs.pr_number != ''
